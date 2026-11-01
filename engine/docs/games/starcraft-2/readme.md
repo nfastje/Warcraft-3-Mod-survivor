@@ -1,0 +1,115 @@
+# StarCraft II
+
+This is an alternate game target for StarCraft II data experiments. It exists mainly to keep the engine honest across more than one Blizzard RTS asset family and to exercise the M3 renderer path behind the same selected-game module boundary.
+
+The code here owns a small game module and the StarCraft II M3 renderer hooks.
+
+## Status
+
+Prototype map-rendering and Galaxy scripting target.
+
+`opensc2` builds, links, and provides a clean place for M3 work. It is not a complete playable StarCraft II implementation. It has a partial server-authored HUD and Galaxy host, including a verified TRaynor01 intro/post-intro script route. The current value is technical: model format coverage, renderer integration, and a second RTS-shaped game module.
+
+## Working
+
+- Separate `opensc2` executable and game/renderer libraries.
+- Selected-game module integration for StarCraft II via the shared engine build.
+- M3 model loader entry point for StarCraft II model data.
+- M3 material, reference table, sequence, keyframe interpolation, and shader scaffolding.
+- Basic skeletal/skinned model render path through the compound renderer.
+- Minimal game module that can initialize, load map collision through the shared map interface, and provide required game exports.
+- Build integration through `make opensc2`.
+
+## Partial
+
+- M3 support is actively shaped around the renderer path and is not full StarCraft II asset parity.
+- The game module is intentionally minimal and mostly acts as a host for map/model experiments.
+- The SC2 HUD parses native layouts and sends server-authored frames; many dynamic gameplay bindings remain incomplete.
+- Map/world behavior is placeholder-level compared with the Warcraft III target.
+
+## Not There Yet
+
+- Playable StarCraft II gameplay.
+- Complete StarCraft II catalog, trigger/event, ability, race, and campaign systems.
+- Full SC2 map format support.
+- Complete M3 material, animation, particle, attachment, and lighting fidelity.
+- Complete StarCraft II menus/HUD, editor-like behavior, and multiplayer flow.
+
+## Build And Run
+
+Build:
+
+```bash
+make opensc2
+```
+
+Run with the Makefile's sample StarCraft II data path and first Terran campaign map:
+
+```bash
+make run-sc2
+```
+
+Or run directly through map resolution:
+
+```bash
+build/bin/opensc2 -data data/StarCraft2 +map TRaynor01
+```
+
+## Notes
+
+This target expects locally supplied StarCraft II data for real asset experiments. Original assets, names, and game data belong to Blizzard Entertainment. The directory is here so the engine can grow beyond one asset format without pretending the SC2 game is already built.
+
+## Documentation
+
+Public reverse-engineering and modding references for how StarCraft II maps are stored, opened, and rendered. Not Blizzard documentation and not a complete implementation spec — a map for loader and renderer work.
+
+### Documents
+
+- [Map Storage And Loading](map-storage-and-loading.md) — container format, component folders, dependency/XML loading behavior, and cache/download context.
+- [Embedded Map Files](embedded-map-files.md) — full binary specs for all known files inside `.SC2Map` archives.
+- [Map, Model, And Unit Data](map-model-unit-data.md) — practical path from placed objects through catalog XML to M3 models.
+- [Terrain And World Rendering](terrain-and-world-rendering.md) — cliff normal welding, authoritative texture batches, and texture lifetime rules.
+- [Parser Notes](parser-notes.md) — practical loading order and implementation guidance.
+- [HUD Layout Pipeline](hud-layout-pipeline.md) — `.SC2Layout` → `sc2BaseFrame_t` → `uiFrame_t` → `svc_layout` pipeline; UI texture resolution via Assets.txt.
+- [Galaxy Scripting](galaxy-scripting.md) — VM lifecycle, trigger wrappers, lookup indexes, isolated regressions, and remaining campaign gaps.
+- [Galaxy Presentation State](galaxy-presentation.md) — objective IDs/text, actor ABI/scopes, conversation metadata, and presentation boundaries.
+- [Galaxy Native Coverage](galaxy-native-coverage.md) — full missing/placeholder inventory, archive extraction, audit limits, and implementation priorities.
+- [UI Layout Format](ui-layout-format.md) — `.SC2Layout` XML syntax, DescIndex manifest, layout directory structure, frame class hierarchy, Galaxy Script overview, and community resources.
+- [References](references.md) — all public sources, tools, and GitHub repos used.
+- [Sounds](sounds.md)
+
+### File Format Details
+
+- [MapInfo](file-formats/mapinfo.md) — complete `MapInfo` binary struct with all fields and player slot layout.
+- [PlacedObjects](file-formats/objects.md) — complete `<PlacedObjects>` XML schema.
+- [Actors And Models](file-formats/actors-and-models.md) — actor system, `CActorUnit` key fields, `CModel` catalog fields.
+- [M3 Model Format](file-formats/m3.md) — M3 binary model format: reference table, geometry, skeleton, animations, materials.
+- [Assets.txt (UI Texture Catalog)](file-formats/assets-txt.md) — `GameData/Assets.txt` skin format (`UI/Key=path`), archive priority, and how `hud.c` loads it.
+
+### Short Version
+
+`.SC2Map`, `.SC2Mod`, `.SC2Archive`, and `.s2ma` files are MPQ archives. A map contains metadata, terrain/pathing binary layers, placed-object XML, minimap/loading assets, localized strings, trigger/Galaxy code, and map-local game-data XML.
+
+### Implementation Status
+
+| Area | Status |
+| --- | --- |
+| MPQ loading | done |
+| `MapInfo` | done |
+| `Objects` (units, doodads) | done |
+| `t3Terrain.xml` (cliff sets, cells, textures) | done |
+| `t3HeightMap` | done |
+| `t3SyncHeightMap` (fine height detail) | done |
+| `t3SyncCliffLevel` | done |
+| `t3CellFlags` | done |
+| `t3TextureMasks` | done |
+| Terrain rendering (ground + cliff walls) | done |
+| Cliff config canonicalization | done |
+| `t3SyncPathingInfo` (pathing) | **not started** |
+| `t3Water` | **not started** |
+| `t3FluffDoodad` | **not started** |
+| Catalog-driven unit → model resolution | Layered unit/actor/model lookup implemented; broader catalog conformance remains partial |
+| `.m3a` animation supplements | **not started** |
+| Team-color texture swapping | **not started** |
+
+- [Selection and control](selection-and-control.md): dropped-unit ownership, shared WC3 routing, M3 picking and rings.

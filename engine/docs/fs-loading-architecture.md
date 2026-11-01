@@ -1,0 +1,132 @@
+# FS / VFS / MPQ Loading Architecture
+
+MPQ sector method `0x08` (PKWARE DCL) is decoded through vendored Mark Adler `blast`, with bounded
+output and error propagation. See [dependency provenance](vendored-dependencies.md#pkware-dcl-decoder-vendorblast)
+and `make test-mpq-compression`. Retail listfiles and patch campaign tables can use this method;
+without it, campaign enumeration can appear incomplete even when direct reads of some maps work.
+The [parity launcher](https://github.com/corepunch/open-realm/blob/main/tools/parity/README.md#catalog-generation) generates its searchable campaign
+catalog from these archives and optional loose-map metadata, without C map-name tables.
+
+## Stack overview
+
+`common/common.c` owns the full filesystem layer. All game code reads files through it.
+
+| Function | Input | Output | Memory | Free with |
+|----------|-------|--------|--------|-----------|
+| `FS_ReadFile(name, &size)` | loose or MPQ path | `HANDLE` (heap) | `MemAlloc` + null terminator | `FS_FreeFile` |
+| `FS_ReadFileQ3(name, **buf)` | loose or MPQ path | `int` size | same as above, Q3-style | `FS_FreeFile` |
+| `FS_ReadLooseFile(name, &size, extra)` | loose-file only | `HANDLE` (heap) | `fopen/fread/MemAlloc` | `FS_FreeFile` |
+| `FS_MmapFile(name, &size)` | loose-file only | `void *` | `mmap` backed by file | `FS_MunmapFile` |
+| `FS_ReadFileAll(name, cb, ud)` | loose or MPQ path | none (callback) | same as FS_ReadFile | caller owns buffer in callback |
+
+`FS_ReadFile` tries MPQ archives first (`FS_OpenFile` → the in-tree `common/mpq.c` reader), then falls back to
+`FS_ReadLooseFile`. `FS_OpenFile` consults an optional `FS_SetPriorityArchive` handle before `archives[]` — WC3
+`CM_LoadMapFormat` mounts the open map MPQ there so sheet/INI loaders see map-imported members. Clear with
+`FS_SetPriorityArchive(NULL)` on map teardown (`gi.SetPriorityArchive` from the game module).
+`SFileOpenFileEx` also recognizes an archive component inside the requested path and can open
+that file as a nested MPQ. Renderer textures and models resolve through `R_AssetCandidates` in this order: the
+generic map-asset scope `<map/archive path>\<asset>`, then the game's optional archive layer
+(`R_GameAssetCandidate`; WC3 returns `<tileset>.mpq\<asset>`), then the ordinary asset path. Keep the full nested path as the cache
+identity; path-only caches otherwise let one map's imported resource satisfy a later map's lookup.
+
+WC3 voice WAV sectors commonly use an encrypted mixed compression stream: the first sector is zlib (`0x02`), while
+later sectors use adaptive Huffman followed by mono ADPCM (`0x41`; stereo is `0x81`). `common/mpq.c` applies
+those methods in mask order. Returning the successfully decoded prefix is not a valid recovery: it leaves a valid
+RIFF header with only one 4096-byte sector, which sounds like a sharply cropped syllable. Callers that request a
+whole file must verify `bytesRead == SFileGetFileSize()`.
+
+`FS_Init` always mounts the resolved base `share/` dir as the built-in loose asset root (engine fonts at its
+top level; per-game read-only defaults under `share/<game>/`, installed from `games/<game>/share/`). Mounted game
+archives remain authoritative for all Blizzard paths. WoW production UI does not place project-owned XML under `share/Interface/FrameXML/`: load the
+native archive path when it exists, or construct runtime presentation when classic WoW itself has no FrameXML for that feature.
+`-data` and `extra_data` add further loose roots and archives after initialization.
+
+## refImport_t FS surface
+
+`client/tr_public.h` — `refImport_t`:
+- `int (*FS_ReadFile)(name, **buf)` — Q3 style
+- `void (*FS_FreeFile)(buf)`
+- `void *(*FS_MmapFile)(name, *size)` — added 2026-08
+- `void (*FS_MunmapFile)(ptr)` — added 2026-08
+
+Wired in `client/cl_main.c` where `re = CL_GetRendererAPI(...)` is called.
+
+### Mmap file hidden header
+
+Every `FS_MmapFile` result has a 16-byte header before the returned pointer:
+```
+[mmap_size: uint32 | flags: uint32 | padding: uint64] [data...]
+                                                 ^-- returned pointer
+```
+
+`FS_MunmapFile` reads the header to determine whether to `munmap` (mmap'd) or `MemFree` (fallback heap). **Do NOT mix with `FS_FreeFile`.**
+
+## SC2 Map Loading — reference pattern
+
+`SC2_MapLoad` in `games/starcraft-2/common/sc2_map.c`:
+
+1. `sc2_source_open` → host `read_file` → `FS_ReadFileQ3` — one heap read of the entire `.SC2Map`.
+2. `SFileOpenArchiveFromMemory` — the MPQ layer holds a `const BYTE *` into that buffer.
+3. Sub-file reads decompress into `sc2_alloc` buffers, then free after use.
+4. Catalog `.SC2Data` archives follow the same pattern: read → archive-from-memory → extract XML → parse → free.
+5. Binary terrain layers are read once and kept alive for the session.
+
+The installed-map discovery and terminal selection path is documented in
+[SC2 map picker](games/starcraft-2/map-picker.md).
+
+**Why this is clean:** only one outer-file copy. All internal access is pointer arithmetic into that buffer. Compressed data must be decompressed (unavoidable), but uncompressed sections can be walked in-place.
+
+## WoW Map Loading — now improved with mmap
+
+`R_RegisterMap` in `games/world-of-warcraft/renderer/wow/r_wowmap.c`:
+
+1. `ri.FS_ReadFile(wdt_path, &data)` — reads `.wdt` once (~130 KB). Parsed, freed.
+2. `Wow_LoadCameraAdts()` per frame → `Wow_LoadNearbyAdts` reloads the tile window.
+3. `Wow_LoadAdtFile` loads up to `(2*WOW_ADT_RADIUS+1)²` ADT tiles (~200–800 KB each).
+
+**After 2026-08:** `Wow_LoadAdtFile` uses `ri.FS_MmapFile` / `ri.FS_MunmapFile`. For loose files:
+- Avoids full `fread` copy into heap
+- OS can evict cold tile pages under memory pressure
+- Falls back to `ri.FS_ReadFile` if `FS_MmapFile` is NULL or returns nothing (MPQ source, Windows)
+
+`Wow_LoadAdt` takes `BYTE const *data` and pointer-walks the chunk tree — zero secondary heap allocations during parse. The mmap pointer works identically to a heap pointer.
+
+`CM_WowTerrainHeightAtPoint` keeps a bounded 16-tile LRU of parsed heightfields. Height queries therefore reuse the decompressed `MCVT` data while retaining a fixed memory budget; a tile is evicted only when the active query set exceeds that budget. M2 character-component texture existence probes use a session cache (`m2_known_textures`) so failed and successful candidate paths are each read from MPQ at most once.
+
+These are resident metadata/data caches, not an instruction to decompress every MPQ asset at startup. Textures and models remain lazy and use the renderer's loaded-resource cache; only assets that are actually referenced become resident. The texture registry is an unbounded session hash keyed case-insensitively by archive path; both successful loads and missing-path placeholders are registered. Do not cap it at the network `MAX_IMAGES` configstring count: WoW world rendering references thousands of renderer-local textures, and dropping later entries turns every draw into another MPQ search.
+
+Modified character atlases use a separate bounded 16-entry LRU keyed by model, appearance, equipment, and display ID. A cache
+hit reuses the rendered 256×256 atlas; a miss re-composites into the oldest render target. Classic `CharSections.dbc` can name
+optional overlays absent from the mounted archives—for example female tauren
+`Character\Tauren\Facial{Upper,Lower}Hair00_00.blp`. Register those misses once and omit the absent optional layer from the
+composite; never paint the magenta missing-texture placeholder into the character skin.
+
+## Key invariants
+
+- Never pass an `FS_MmapFile` result to `FS_FreeFile` — will `MemFree` an mmap'd address.
+- Never pass an `FS_ReadFile` result to `FS_MunmapFile` — will `munmap` a heap pointer.
+- MPQ's `SFileOpenArchiveFromMemory` does NOT free the backing buffer on close — caller owns it.
+- `FS_MmapFile` is macOS/Linux only (no Windows implementation); callers handle the NULL fallback.
+
+## Writer compatibility with classic Storm
+
+Retail WC3 1.27b cursor audit maps exposed two writer defects that reader-only
+round trips did not catch. Hash-table placement must use hash type **0**;
+types **1/2** are the two filename comparison hashes stored in each entry.
+Classic Storm probes from the type-0 slot and stops at an unused entry. Our
+reader's full-table search masked incorrectly placed entries.
+
+Compressed writer members now use 4096-byte sectors (header shift 3), an
+`N+1` offset table, and a compression-method byte before each compressed sector.
+An incompressible sector is stored verbatim; an entire member is stored raw
+when sector overhead would make it larger. The previous `SINGLE_UNIT` output
+could be opened/found by the tested retail Storm but failed `SFileReadFile`.
+The same extracted map contents load after correcting placement and using
+classic sector storage. Neither the JASS source nor Wine's local-file setting
+was the cause.
+
+`make test-mpq-compression` includes `writer_retail_hash_probe` (inspect the
+written table using classic probing) and `writer_retail_sector_layout`
+(inspect offsets/flags and read across sector boundaries). These use generated
+bytes and require no retail files. See [cursor rendering](games/warcraft-3/cursor-rendering.md)
+for the retail scene generator that exposed the incompatibility.

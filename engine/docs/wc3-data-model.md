@@ -1,0 +1,353 @@
+# WC3 Data Model
+
+Read this when working on unit stats, combat, abilities, hero systems, pathfinding, or any code that reads from SLK/metadata tables.
+
+## SLK And INI Loading
+
+WC3 table loading follows the same boundary as `stb_dbc.h`: callers declare a `slkField_t` schema and own an
+`stbSlkCache_t` containing only decoded typed rows. `Stb_SlkCacheLoad` and `Stb_SlkCacheLoadBuffer` perform file parsing
+and decoding; `Stb_SlkCacheFind` resolves an explicitly declared FOURCC row key; `Stb_SlkCacheFree` releases owned
+strings and rows. The row key is a normal schema entry with an empty column name and `STB_SLK_FOURCC`; the loader never
+writes an implicit key into byte zero.
+
+INI files with fixed row layouts use `Stb_IniCacheDecode` into an `stbSlkCache_t`. Dynamic dictionaries such as skin,
+miscellaneous, command, and ability text files remain `stbIniCache_t` values queried through `Stb_IniCacheFind`.
+`sheetRow_t`, fields, linked lists, and append operations are private implementation details of
+`games/warcraft-3/sheet/sheet.c` and must not cross the parser boundary.
+
+## RoC/TFT Edition And W3I Game Data Sets
+
+OpenRealm has two independent inputs when selecting Warcraft object data:
+
+1. `fs_expansion` selects the installed game edition. `0` is Reign of Chaos and hides the configured `War3x*` archive family; `1` is The Frozen Throne and exposes it.
+2. `war3map.w3i::gameDataSet` selects the map data overlay inside that edition. `1` selects `Custom_V0`/`Custom_V1`; other explicit values (including `2`) select `Melee_V0`/`Melee_V1`. When the W3I field is absent, zero, or `0xFFFFFFFF` (unset sentinel), the `melee_map` flag selects Melee and other maps select Custom. Explicit selections continue to override the map flag.
+
+TFT campaign maps can store `gameDataSet = 0xFFFFFFFF` without the `melee_map` flag. Those maps must resolve `Custom_V1` sheets before root fallback. For example, `UndeadX07c.w3x` uses `Custom_V1\Units\UnitBalance.slk` for the Faceless Ones units; falling back from a nonexistent `Melee_V1` sheet to root `UnitBalance.slk` inflates their cost-based Unit Score from the retail 12,465 to 15,030. Fix the W3I selector, not the score formula or a particular map's costs.
+
+The resulting lookup is therefore:
+
+```text
+fs_expansion = 0 + custom map -> Custom_V0\<sheet path> -> root fallback
+fs_expansion = 0 + melee map  -> Melee_V0\<sheet path>  -> root fallback
+fs_expansion = 1 + custom map -> Custom_V1\<sheet path> -> root fallback
+fs_expansion = 1 + melee map  -> Melee_V1\<sheet path>  -> root fallback
+```
+
+`G_ReadGameDataFile` owns this overlay for sheet/object-data parsing. Lookup order:
+
+```text
+1. current map archive (FS_SetPriorityArchive / CM_LoadMapFormat) — if mounted
+2. <gameDataSet prefix>\<sheet path>   e.g. Custom_V1\Units\CampaignUnitFunc.txt
+3. root path in the already-selected ROC/TFT archive view
+```
+
+Archive precedence and the existing RoC/TFT `War3x*` visibility rule therefore remain authoritative; there is no hard-coded list of TFT-only unit, ability, building, or upgrade rawcodes.
+
+`CM_LoadMapFormat` keeps the open map MPQ mounted as the FS priority archive for the lifetime of the map so `Units\CampaignUnitFunc.txt`, `war3mapMisc.txt`, and other map-imported sheets win over Custom_V*/base. `FS_SetPriorityArchive(NULL)` runs on map clear.
+
+`G_LoadMap` applies the W3I-selected prefix only after `gi.ClearWorld()`, because live edicts retain typed-row pointers. When the prefix changes **or** a map archive is mounted, OpenRealm reloads `war3skins.txt`, misc constants, typed unit/ability/upgrade tables, profile/command INI data, and ability `A_INIT` caches as one map-boundary operation, then rebuilds map-local `war3map.w3u` / `war3map.w3a` overrides. Command-card `Builds`, `Trains`, `Researches`, unit `abilList`, and in-place `Upgrade` lists consequently come from the active data set instead of being filtered by a TFT rawcode blacklist.
+
+`war3mapMisc.txt` is listed first in `miscdata_files[]` so `FS_FindSheetCell` (first-match) prefers map Misc keys such as `MaxHeroLevel` over stock `MiscGame.txt`.
+
+W3I format version is a separate compatibility input. `G_IsReignOfChaosMap()` recognizes parsed formats `1..24` as RoC maps; zero is treated as unknown for synthetic/test metadata. This helper is for runtime semantic differences, such as the stock RoC hero-inventory fallback, and must not be confused with `fs_expansion` or `gameDataSet`.
+
+Tests in `games/warcraft-3/game/tests/t_slk.c` cover W3I data-set fallback (including zero and `0xFFFFFFFF` on melee and non-melee maps), `Custom_V0`/`Melee_V1` prefix formation, RoC-map detection, prefixed fixture selection, root fallback, and map-archive CampaignUnitFunc / war3mapMisc / w3a / w3b overrides. Fixture files live under `games/warcraft-3/tests/resources-src/{Custom_V0,Melee_V1,MapOverlay}/`. `make test-assets` packs those overlay members as `Maps/MapOverlay.w3x` inside `tests.mpq`, so `FS_ListMaps` reports five fixture maps (`commands.fixture_maps_are_listed_from_mpq`).
+
+The current overlay is deliberately scoped to sheet/INI object data. Warsmash applies its subdirectory data source more broadly, but extending model/texture/FDF asset resolution would cross the renderer/client asset-scope boundary and is separate work; it is not required to keep TFT-only techtree rows out of RoC command cards.
+
+See also [WC3 map format](games/warcraft-3/file-formats/map.md) for the W3I fields, [runtime](architecture/runtime.md) for `fs_expansion`, and [DotA Custom-Map Playability](games/warcraft-3/dota-map-playability.md).
+
+## The Base-vs-Computed Column Trap
+
+Several UnitBalance.slk columns exist in both a **base** form and a **computed** (real) form. The base column is the editor-entered value; the computed column includes bonuses (hero attributes, etc.). Always read the computed column at runtime — base values are 0 or wrong for heroes.
+
+| Stat | Wrong (base) | Correct (computed) | Source |
+|---|---|---|---|
+| Max HP | `uhp` | `uhpm` → realHP | UnitBalance.slk |
+| Max mana | `manaN` / old `umpc` | `umpm` → realM | UnitBalance.slk |
+| Armor | `udef` (0 for heroes) | `udfc` → realdef (incl. AGI bonus) | UnitBalance.slk |
+
+The old codes `umpc`, `uagc`, `uinc`, `ustc` are **not registered** in the metadata table — `UnitStringField` returns NULL and accessors silently read as 0. Any unregistered field code logs a one-time warning.
+
+## Unit Field Code Reference
+
+Gameplay reads typed rows through `G_UnitBalance`, `G_UnitData`, `G_UnitUI`, `G_UnitWeapons`, `G_UnitAbil`, and
+`G_UnitProfile`. Profile/INI files are merged into `UnitProfile_t`; there is no separate macro access layer.
+
+`G_BindEntityData` resolves these rows once and stores direct, table-named pointers on `edict_t` (`UnitBalance`,
+`UnitWeapons`, `ItemData`, and so on). Keep those pointers flat: their exact names are the table-to-edict contract.
+They do not replace mutable runtime values such as attacks, armor, movement speed, hero attributes, health, or mana;
+items, upgrades, and JASS natives modify those values after spawn. Cohesive transient state belongs in the existing
+named edict sections (`item`, `destructable`, `cargo`, `movement`, `channel`, and `sound`). The server-visible prefix
+through `areabounds` must remain aligned with `server.h`.
+
+### Map-local `war3map.w3u` / `war3map.w3t` / `war3map.w3a` typed-row overrides
+
+`CM_LoadMap` parses original-unit edits and user-created units from `war3map.w3u` into `MAPINFO.originalUnits` and
+`MAPINFO.userCreatedUnits`. Before map entities spawn, `G_SetMapUnitOverrides` builds stable per-map `UnitBalance_t`,
+`UnitProfile_t`, and `UnitUI_t` rows. Original-unit edits are applied first; a custom unit then inherits the already-overridden base
+rows and applies its own registered Balance/Profile/UI modifications. `G_UnitBalance(id)`, `G_UnitProfile(id)`, and `G_UnitUI(id)`
+check these exact-ID rows before falling back to the base-SLK/custom-ID remap.
+
+Ability object edits from `war3map.w3a` land in `MAPINFO.originalAbilities` / `userCreatedAbilities` (w3a modifications include
+the level + data-pointer ints that w3u omits). `G_SetMapAbilityOverrides` builds `AbilityData_t` rows. `G_AbilityData` checks
+these exact-ID rows before falling back to the base-SLK/custom-ID remap. Ability apply currently covers
+`alev`/`arlv`/`alsk`/`apri`, leveled `amcs`/`acas`/`adur`/`ahdu`/`acdn`/`aare`/`aran`/`atar`, and DataA–I via
+`dataPointer`+`level`. Full AbilityMetaData-driven field coverage remains follow-up work.
+
+The same map-load pass parses `war3map.w3t` into `MAPINFO.originalItems` / `userCreatedItems` and builds stable per-map `ItemData_t`
+rows. Original-item edits are applied before custom items inherit their base row. `G_ItemData(id)` therefore sees map-authored item
+prices, models, stock maximum/replenish/start fields, and other registered `ItemData` modifications before falling back to the base
+SLK/custom-ID remap.
+
+This is required because spawned edicts retain immutable typed-row pointers; never implement map overrides with one mutable scratch
+row. String override values point into map-owned `war3map.w3u` / `war3map.w3t` modification storage, so the caches are rebuilt at map
+load and cleared again during unit-data shutdown.
+
+The current merge covers fields already mapped to `UnitBalance_t`, `UnitProfile_t`, or `UnitUI_t` in `UnitsMetaData`. This includes
+balance fields such as `ugol`, `ufoo`, `usma`, `usrg`, and `usst`; `uani` (`animProps`, Required Animation Names); `umdl` (model);
+`usca` (model scale); profile/name fields; tint/team-colour fields; selection/shadow fields; and `usnd`. Data/Weapons/Abilities
+object-data merge remains separate work and still uses base typed rows through `ResolveUnitID`.
+
+`uani` is especially important because a different visible form does not necessarily mean a different model file.
+`UnitProfile.animProps` supplies persistent secondary MDX animation tags such as `alternate`; `G_SetUnitAnimation()`
+combines them with the requested animation family and selects a matching tagged sequence. Per-unit JASS changes from
+`AddUnitAnimationProperties` mutate the edict's active tags and reselect its logical animation. See
+[Required Animation Names](games/warcraft-3/unit-animation-properties.md).
+
+The earlier model bug was caused by resolving a custom rawcode to `originalUnitID` *before* `G_UnitUI` lookup. That
+made a map-authored `umdl` invisible to spawn code. `umdl` values may carry an authored model extension; unit spawning,
+build placement previews, and cinematic portraits therefore use `G_NormalizeModelFilename`, which preserves an
+existing extension and adds `.mdx` only to extensionless base-SLK stems. Do not blindly append `.mdx` to a map
+override.
+
+FourCC/JASS reads use `UnitIntegerField` / `UnitRealField` / `UnitBooleanField` / `UnitStringField`. Unit metadata binds
+each FourCC to its DDX field descriptor and typed-row index during `InitUnitData`, so these accessors read the same arrays
+as gameplay instead of returning to `sheetRow_t`. Add fields to the owning row and DDX schema in `g_metadata.c`.
+
+### Health / Mana
+| Macro | Code | Notes |
+|---|---|---|
+| `UNIT_HP` | `uhpm` | realHP — computed max HP including STR bonus for heroes |
+| `UNIT_MANA_MAXIMUM` | `umpm` | realM — computed max mana including INT bonus |
+| `UNIT_MANA_INITIAL` | `umpi` | mana0 — starting amount |
+| `UNIT_HIT_POINTS_REGENERATION_RATE` | `uhpr` | base regen rate |
+| `UNIT_HIT_POINTS_REGENERATION_TYPE_NAME` | `uhrt` | **string** enum: `"always"/"night"/"blight"/"none"` — use `_NAME` variant, not integer |
+| `UNIT_MANA_REGENERATION` | `umpr` | base mana regen rate |
+
+### Defense / Armor
+| Macro | Code | Notes |
+|---|---|---|
+| `UNIT_ARMOR_VALUE` | `udfc` | realdef — computed armor including hero AGI bonus; use this everywhere |
+| `UNIT_ARMOR_TYPE` | `uarm` | integer armor type index |
+| `UNIT_DEFENSE_TYPE_NAME` | `udty` | **string** enum: `"small"/"medium"/"large"/"fort"/"normal"/"hero"/"divine"/"none"` — `atoi` returns 0 for every unit; map via `FindEnumValue` |
+
+### Hero Attributes
+| Macro | Code | Notes |
+|---|---|---|
+| `UNIT_STRENGTH` | `ustr` | base STR (not `ustc` — unregistered) |
+| `UNIT_AGILITY` | `uagi` | base AGI (not `uagc` — unregistered) |
+| `UNIT_INTELLIGENCE` | `uint` | base INT (not `uinc` — unregistered) |
+| `UNIT_STRENGTH_PER_LEVEL` | `ustp` | gain per level |
+| `UNIT_AGILITY_PER_LEVEL` | `uagp` | gain per level |
+| `UNIT_INTELLIGENCE_PER_LEVEL` | `uinp` | gain per level |
+| `UNIT_PRIMARY_ATTRIBUTE` | `upra` | string: `"STR"/"AGI"/"INT"` |
+
+### Attack 1
+| Macro | Code | Notes |
+|---|---|---|
+| `UNIT_ATTACK1_DAMAGE_BASE` | `ua1b` | base damage (before hero primary-attr bonus) |
+| `UNIT_ATTACK1_DAMAGE_NUMBER_OF_DICE` | `ua1d` | dice count |
+| `UNIT_ATTACK1_DAMAGE_SIDES_PER_DIE` | `ua1s` | sides per die |
+| `UNIT_ATTACK1_ATTACK_TYPE` | `ua1t` | string: `"normal"/"pierce"/"siege"/"spells"/"chaos"/"magic"/"hero"` |
+| `UNIT_ATTACK1_BASE_COOLDOWN` | `ua1c` | full cooldown (windup + recovery) |
+| `UNIT_ATTACK1_DAMAGE_POINT` | `udp1` | damage fires at this fraction of the cooldown |
+| `UNIT_ATTACK1_BACKSWING_POINT` | `ubs1` | anim ends here; recovery = cooldown - damagePoint |
+| `UNIT_ATTACK1_RANGE` | `ua1r` | attack range |
+| `UNIT_ATTACK1_AREA_OF_EFFECT_FULL_DAMAGE` | `ua1f` | splash full-damage radius |
+| `UNIT_ATTACK1_AREA_OF_EFFECT_MEDIUM_DAMAGE` | `ua1h` | splash medium radius |
+| `UNIT_ATTACK1_AREA_OF_EFFECT_SMALL_DAMAGE` | `ua1q` | splash small radius |
+| `UNIT_ATTACK1_DAMAGE_FACTOR_MEDIUM` | `uhd1` | medium-ring damage multiplier |
+| `UNIT_ATTACK1_DAMAGE_FACTOR_SMALL` | `uqd1` | small-ring damage multiplier |
+| `G_UnitProfile(id)->attack[0].speed` | `ua1z` | 0 = melee; Profile/INI |
+
+### Movement / Collision
+| Macro | Code | Notes |
+|---|---|---|
+| `UNIT_SPEED` | `umvs` | movement speed |
+| `UNIT_TURN_RATE` | `umvr` | radians/sec turn rate |
+| `UNIT_COLLISION` | `ucol` | collision radius for unit-vs-unit separation (e.g. Peasant=16). TFT stores it in `UnitBalance.slk`; ROC stores it in `UnitData.slk`. Buildings use pathing texture footprint instead (their collisionSize is ~0) |
+| `UNIT_MOVE_TYPE_NAME` | `umvt` | **string** enum: `"foot"/"fly"/"hover"/"float"/"amph"/"horse"` — use `_NAME` variant |
+| `UNIT_MOVE_HEIGHT` | `umvh` | authored default fly/model-origin height above the selected support surface; copied to mutable `unitinfo.FlyHeight` at spawn |
+| `UNIT_SIGHT_RADIUS` | `usid` | daytime sight range |
+| `UNIT_SIGHT_RADIUS_NIGHT` | `usin` | nighttime sight range |
+
+### Economy / Build
+| Macro | Code | Notes |
+|---|---|---|
+| `UNIT_GOLD_COST` | `ugol` | |
+| `UNIT_LUMBER_COST` | `ulum` | |
+| `UNIT_FOOD_USED` | `ufoo` | food consumed |
+| `UNIT_FOOD_MADE` | `ufma` | food provided |
+| `UNIT_BUILD_TIME` | `ubld` | seconds; multiply by 1000 for ms |
+| `UNIT_IS_BUILDING` | `ubdg` | boolean |
+
+### Misc
+| Macro | Code | Notes |
+|---|---|---|
+| `UNIT_LEVEL` | `ulev` | unit/creep level |
+| `UNIT_ACQUISITION_RANGE` | `uacq` | auto-attack trigger range |
+| `UNIT_MODEL` | `umdl` | MDX path |
+| `UNIT_ABILITIES_NORMAL` | `uabi` | comma-separated ability codes |
+| `G_UnitProfile(id)->attack[n].art/speed/arc/homing` | `ua1m`/`ua2m`, `ua1z`/`ua2z`, `uma1`/`uma2`, `umh1`/`umh2` | `Missileart`, `Missilespeed`, `Missilearc`, `MissileHoming` in `*UnitFunc.txt` hold one comma-separated element per weapon (retail `hgyr`: `2000,900`); the schema's `list` index selects the element, and a single value covers both attacks, matching WarSmash's indexed field lookup |
+| `UNIT_ABILITIES_HERO` | `uhab` | hero abilities |
+| `G_UnitProfile(id)->trains` | `utra` | trainable unit codes |
+| `G_UnitProfile(id)->builds` | `ubui` | buildable structure codes |
+| `G_UnitProfile(id)->upgrade` | `uupt` | in-place unit-type upgrade targets (for example Town Hall -> Keep); distinct from `UpgradeData.slk` research |
+
+## Ability Field Codes
+
+Ability custom data uses `abilityDataRow_t.data[level][slot]`, with `AB_Data` retained for callers that start from a class-name string.
+ROC `Data<level><slot>` columns and TFT `Data<slot-letter><level>` columns map to that canonical array in the DDX schema.
+
+| Ability | Field | Column | Value |
+|---|---|---|---|
+| Goldmine (`Agld`) | slot 1 | Max Gold | 12500 |
+| Goldmine | slot 2 | Mining Duration | 1 |
+| Goldmine | slot 3 | Mining Capacity | 1 |
+| Harvest lumber (`Ahar`) | slot 1 | Damage to Tree | 1 |
+| Harvest lumber | slot 2 | Lumber Capacity | 10 |
+| Harvest lumber | slot 3 | Gold Capacity | 10 |
+
+Common ability fields (all abilities):
+- `Rng1` — cast/work range
+- `Dur1` — duration / cooldown
+- `Area1` — area radius
+- `AB_Data(..., level, slot)` — ability-specific data with ROC/TFT schema resolution
+
+## Combat Damage Model (WC3 1.29)
+
+Verified from `MiscGame.txt`. Applied on the **physical attack path only** (`damage_target`, `throw_missile`). Spells and trigger damage call `T_Damage` directly and are unaffected.
+
+### Attack × Defense Multiplier Table
+
+```
+             small  medium  large  fort  normal  hero  divine  none
+none          1.00   1.00   1.00  1.00    1.00  1.00    1.00  1.00
+normal        1.00   1.50   1.00  0.70    1.00  1.00    0.05  1.00
+pierce        2.00   0.75   1.00  0.35    1.00  0.50    0.05  1.50
+siege         1.00   0.50   1.00  1.50    1.00  0.50    0.05  1.50
+spells        1.00   1.00   1.00  1.00    1.00  0.70    0.05  1.00
+chaos         1.00   1.00   1.00  1.00    1.00  1.00    1.00  1.00
+magic         1.25   0.75   2.00  0.35    1.00  0.50    0.05  1.00
+hero          1.00   1.00   1.00  0.50    1.00  1.00    0.05  1.00
+```
+
+### Armor Reduction
+`DefenseArmor` is loaded from the active Misc data (`Units\MiscGame.txt` plus `war3mapMisc.txt` overrides; stock fallback `0.06`).
+
+For non-negative armor `A` and coefficient `K`:
+
+`dmg *= 1 / (1 + K * A)`
+
+For negative armor:
+
+`dmg *= 2 - (1 - K)^(-A)`
+
+This is the Warsmash/WC3 exponential negative-armor curve. Minimum final physical-attack damage remains 1 in the current OpenRealm path.
+
+Attack-type/defense-type rows are also loaded from the active `DamageBonus*` Misc fields rather than being fixed in `s_attack.c`; if `DamageBonusSpells` is absent, the active Magic row is used as Warsmash's fallback. Basic missile attacks roll at launch and apply type/armor mitigation at impact.
+
+See [Attack Damage](games/warcraft-3/attack-damage.md) for the runtime modifier and timing contract.
+See [Unit Altitude And Support Surfaces](games/warcraft-3/unit-altitude.md) for `moveHeight`, water/bridge support Z, fly-height natives, and projectile impact-height placement.
+
+### Defense Type Is a String
+`defType` in `UnitBalance.slk` is a string column (`"large"`, `"medium"`, etc.), not an integer. `atoi` returns 0 for every unit. Use `FindEnumValue` against the `defense_type[]` enum table. Base armor is `udef`; load `udfc` (realdef) at spawn.
+
+## Hero Stat System
+
+### Attribute → Derived Stats (per-point constants from UnitBalance.slk)
+- **Strength**: +25 max HP per point
+- **Intelligence**: +15 max mana per point
+- **Agility**: armor contribution uses `Misc.AgiDefenseBonus` (stock 0.3); attack speed uses `Misc.AgiAttackSpeedBonus` (stock 0.02)
+- **Primary attribute**: attack damage uses `Misc.StrAttackBonus` (stock 1.0) for whichever `upra` primary attribute is active
+
+Stats are precomputed at base attributes; deltas are applied live on attribute change. Gaining STR heals by the HP gained; losing attributes cannot drop a living hero below 1 HP. Call `G_RecomputeHeroStats` whenever `hero.str/agi/intel` change.
+
+### XP and Leveling
+- Max level: `Misc/MaxHeroLevel` from `MiscGame.txt` (default 10).
+- XP to reach level L is accumulated from `Misc/NeedHeroXP`; when the table runs out, `NeedHeroXPFormulaA/B/C` extend the per-level requirements. Stock TFT data has `NeedHeroXP=200` with A/B/C=`1/100/0`; retail measurements yield per-level requirements `200,300,400,...` and cumulative thresholds L1=0, L2=200, L3=500, L4=900, L10=5400. OpenRealm treats this stock one-entry configuration as the measured linear sequence; custom tables use the general formula recurrence. If no Misc data is available, the fallback is also `200,300,400,...`.
+- Attributes at level L: `base + trunc((L-1) * perLevelGain)` — **truncated** toward zero (bare float→int cast, no rounding), matching the WC3 binary.
+- XP is the source of truth; level only ever increases. `SetHeroLevel` works by granting enough XP to reach the target level.
+- Level-up fires both `EVENT_PLAYER_HERO_LEVEL` and `EVENT_UNIT_HERO_LEVEL` once per level gained. `GetLevelingUnit()` resolves to the Hero for either event family.
+- Unspent Hero skill points are independent mutable runtime state. Level-up adds one point per crossed level; `UnitModifySkillPoints` can add/remove points directly without changing XP/level, while `GetHeroSkillPoints` reports the current pool.
+
+### XP on Kill (from MiscGame.txt)
+Key constants (stock TFT-style defaults):
+- `HeroExpRange` = 1200 (XP-share radius).
+- `GrantNormalXP` plus `GrantNormalXPFormulaA/B/C` define ordinary-victim XP by victim level. The recurrence is `f(level) = A*f(level-1) + B*level + C`; stock TFT begins 25,40,60,85,115,150,... .
+- `GrantHeroXP` plus `GrantHeroXPFormulaA/B/C` define enemy-Hero XP by victim Hero level. Stock values begin 100,120,160,220,300 and continue 400,500,... .
+- `HeroFactorXP` is the neutral-creep reduction table indexed by the **receiving Hero's level**. It is not indexed by Hero-victim level difference and is not applied to enemy player-controlled units.
+- `BuildingKillsGiveExp` = 0 controls whether a **building making the killing blow** generates Hero XP. Separately, enemy structures only grant victim XP when they have an authored attack.
+- `SummonedKillFactor` = 0.50 scales XP from summoned victims.
+- `MaxLevelHeroesDrainExp` = 1 keeps max-level Heroes in the sharing divisor; setting it to 0 excludes them.
+- `GlobalExperience` = 1; used only as a fallback when no eligible Hero is inside `HeroExpRange`.
+- the receiving player's `SetPlayerHandicapXP` value scales that Hero's final kill-XP award.
+
+These values are read live from `game.config.misc` so `war3mapMisc.txt` overrides remain authoritative. Single-Hero tier bonus factors are still separate follow-up work.
+
+### Hero Revival
+Dead heroes do **not** decay — they persist as revivable bodies (altar mechanic). `unit_decay_think` is a no-op for heroes. Revive restores HP/mana by configurable life/mana factors.
+
+## Pathfinding and Collision
+
+### Collision Radius
+Use `UNIT_COLLISION` (`ucol`) for unit-vs-unit separation — e.g. Peasant=16. The old approach (pathing-texture cell count × 16 × 1.3) was ~2.6× too large and caused over-separation.
+
+Buildings block via their pathing texture footprint (their `collisionSize` is ~0 and should not be used for separation). Buildings bake their footprint into the pathmap on construct.
+
+Trees do **not** fabricate a collision circle — footprint only.
+
+### Flow Field
+- SPFA relaxation; no diagonal corner-cutting.
+- Collision radius in cells uses `/32` (one cell), not `/24`.
+- The old `0xffff` iteration cap truncated large maps and is removed.
+- `CM_PointIsPathableForRadius` remains the ground/UNWALKABLE query; mask-aware routing APIs select UNFLYABLE for flyers.
+- Shared flow-cache identity includes adjusted goal, collision radius, and blocked pathing mask so ground and flying fields cannot alias.
+
+### Movement
+- `movetp="fly"` / `AI_FLYING` uses static UNFLYABLE (`0x04`) rather than UNWALKABLE (`0x02`); path-texture green contributes UNFLYABLE.
+- Move-time validation (swept circle-vs-circle), not post-move push: units block and slide, they don't shove idle units.
+- Dynamic collision is layer-separated: air blocks air, ground blocks ground, and air/ground pass through each other.
+- Broad-phase box spans the whole step so fast units can't tunnel through blockers between ticks.
+- Avoidance resolves into a single heading per tick; slower unit yields to faster (speed-priority give-way).
+
+## Info Panel and UI Refresh
+
+The single-unit info panel remains a server-baked `svc_layout` snapshot, but the portrait HP/mana strings are live player-state bindings rather than baked text. `G_UpdateClientInfoPanels` runs after `G_RunEntities`, iterates connected game clients (reserved client edicts are intentionally not normal `inuse` entities), and writes the sole-selected unit's whole-number current/max HP and mana into reserved `playerState.stats[18..21]`. The client formats those values through `UI_STAT_SELECTION_HEALTH_TEXT` / `UI_STAT_SELECTION_MANA_TEXT`, so damage, healing, regeneration, and mana changes do not require a complete portrait or info-panel layout resend. `LAYER_INFOPANEL` is reserialized only for presentation state that is actually baked into that layer, such as selection identity or Hero XP.
+
+## JASS Event Matching
+
+- `EVENT_UNIT_DEATH` — widget-specific death triggers (`TriggerRegisterDeathEvent`/`UnitEvent`).
+- `EVENT_PLAYER_UNIT_DEATH` — owner's player-unit-death triggers (`TriggerRegisterPlayerUnitEvent`); both must be published on `unit_die`.
+- `EVENT_PLAYER_UNIT_*` handlers registered with a **player** as subject fire for any of that player's units (match by owner, not unit identity); the triggering unit is passed as trigger context.
+- Hero progression publishes both `EVENT_PLAYER_HERO_LEVEL` and `EVENT_UNIT_HERO_LEVEL` once per level gained (loop from oldLevel+1 to newLevel); `GetLevelingUnit()` resolves to that Hero.
+
+## Misc Data Constants (MiscGame.txt)
+
+Read via `FS_FindSheetCell(game.config.misc, "Misc", key)`. Never hardcode defaults without a `BZ_HARDCODED_DATA_FALLBACK` comment. Common keys:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `MaxHeroLevel` | 10 | hero level cap |
+| `NeedHeroXP` | 200 | per-level XP requirement table; extended by `NeedHeroXPFormulaA/B/C` |
+| `GlobalExperience` | 1 | globally distribute kill XP only when no eligible Hero is in range |
+| `HeroExpRange` | 1200 | XP-share radius |
+| `GrantNormalXP` | 25 | first ordinary-victim XP table value |
+| `GrantNormalXPFormulaA/B/C` | 1 / 5 / 5 (TFT) | extend ordinary-victim XP beyond the authored table |
+| `GrantHeroXP` | 100,120,160,220,300 | enemy-Hero victim XP table |
+| `GrantHeroXPFormulaA/B/C` | 1 / 0 / 100 | extend enemy-Hero XP beyond the authored table |
+| `HeroFactorXP` | data-driven | neutral-creep percentage by receiving Hero level |
+| `SummonedKillFactor` | 0.50 | multiplier for summoned victims |
+| `MaxLevelHeroesDrainExp` | 1 | max-level Heroes remain in the XP-sharing divisor |
+| `BuildingKillsGiveExp` | 0 | whether building killing blows generate Hero XP |

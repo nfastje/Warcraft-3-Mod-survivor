@@ -1,0 +1,179 @@
+# Test Performance
+
+## Execution Contract
+
+The aggregate `test` target runs independent standalone, engine, and game-suite targets. Each `test_schema` target now has two stages: a persistent binary target and a test execution target. The binary depends on its compiled source list, so source edits rebuild it while repeated test runs execute without recompiling.
+
+The aggregate target runs the suites concurrently through recursive Make. `TEST_JOBS` controls the concurrency and defaults to 16; this was fastest on the local 8-core macOS machine in the measurements below.
+
+The `test-jass-build` shell recipe is marked recursive with `+` because its script invokes Make. This preserves
+GNU Make jobserver descriptors during parallel suite execution and avoids the Linux `jobserver unavailable` warning.
+
+Separate `BIN_DIR`/`LIB_DIR` configurations still share `build/tests` fixture
+outputs, including `tests.mpq`. Finish `test-assets` before running engines
+from multiple configurations; do not regenerate that archive while another
+configuration is reading it. Run already-built test binaries directly when
+comparing compatibility modes against the same prepared fixtures.
+
+## Benchmark
+
+### macOS SDL event test dependency
+
+On macOS arm64, SDL2-compat 2.32.72 can crash inside SDL3's `SDL_PushEvent_REAL`
+when an events-only headless test submits `SDL_TEXTINPUT`. A standalone program
+that initializes `SDL_INIT_EVENTS` and pushes one text event reproduces it,
+without any engine code. Official SDL2 2.32.10 passes the same reproducer and
+all 618 client-input assertions, and the complete test suite passes when linked
+against it. Keep the text-input tests enabled.
+
+For isolated validation, build SDL2 in a temporary prefix and use fresh `BIN_DIR`
+and `LIB_DIR` outputs. Put its library directory before Homebrew's in `LDFLAGS`
+and add `-Wl,-rpath,<SDL2-prefix>/lib`. Setting `DYLD_LIBRARY_PATH` only on
+`make` is insufficient because macOS system shells can strip it before the
+test executable starts. A direct test invocation with that variable also works.
+
+### Measurements
+
+Measured on `main` at commit `ac44fc12` before the change:
+
+| Run | Tests | Wall time |
+| --- | ---: | ---: |
+| Initial `make test` including builds | 1,396 | 52.30 s |
+| Repeat `make test` with existing build | 1,396 | 28.22 s |
+
+After incremental binaries and parallel suite execution:
+
+| Run | Tests | Wall time |
+| --- | ---: | ---: |
+| First run after rule migration | 1,396 | 5.13 s |
+| Steady-state run, `TEST_JOBS=16` | 1,396 | 4.79 s |
+| Plain `make test` using the default | 1,396 | 5.65 s |
+
+The final runs passed all 17 suite summaries. The default run processes about 1,235 tests per 5 seconds, exceeding the 1,000-tests-per-5-seconds target. With `TEST_JOBS=16`, throughput is about 1,457 tests per 5 seconds. Compared with the repeatable pre-change run, default wall time improved by 80%.
+
+## October 2026 Regression
+
+Steady-state `make test` on the same 8-core M1 (4 performance + 4 efficiency cores), measured at historical commits:
+
+| Commit | Date | Tests | Wall time |
+| --- | --- | ---: | ---: |
+| `b1e69ec2c` | 2026-08-28 | 1,408 | 3.7 s |
+| `22abe18d0` | 2026-10-01 | 5,416 | 32.6 s |
+| `445891148` | 2026-10-08 | 6,198 | 47.0–57.6 s |
+| `445891148` + this change | 2026-10-08 | 6,198 | 17.9–21.7 s |
+
+The WC3 engine suite grew from about 500 to 2,480 tests and ran twice (classic, then TFT) in one serial
+recipe, about 19 s per pass. More than half of each pass was `wc3_save`: every round trip writes and rereads a
+5.8 MB save, and the footer checksum hashed it one byte at a time.
+
+The fix:
+
+- `test-wc3-engine` runs each data variant as `WC3_TEST_SHARDS` (default 4) round-robin shards through
+  `TEST_SHARD=index/count`. Each shard writes `test-wc3-engine-<variant>-<index>.xml`. More shards did not help on
+  the M1 because the efficiency cores run the engine tests about half as fast.
+- The save footer checksum hashes 64-bit words in four lanes, and save streams use a 1 MB stdio buffer.
+  Save version 74.
+- `test-core` builds a persistent binary, and the Python audits run inside the parallel phase.
+
+Sharding exposed three tests that depended on HUD state left by earlier tests. Each one now resets or loads the
+HUD it asserts against. When adding tests, check order independence with a few shard counts:
+
+```sh
+for i in 0 1 2 3 4 5 6; do TEST_SHARD=$i/7 build/bin/openwarcraft3-tests -data build/tests +dedicated 1 +test '*'; done
+```
+
+`TEST_SLOW_MS=<ms>` prints every test at or above that wall time and the run total:
+
+```sh
+TEST_SLOW_MS=50 build/bin/openwarcraft3-tests -data build/tests +dedicated 1 +test 'wc3_*' 2>&1 | grep SLOW
+```
+
+Remaining cost: each save round trip still writes and rereads about 5.8 MB even for a small test world, and
+`G_PoolsReset`/`__bzero` show up in every test's reset. A breakdown of which records make up the file is the next
+step. Shrinking it would cut both disk traffic and `wc3_save` time.
+
+## Diagnostic Workflow
+
+### SDL2-compat text-event injection
+
+On macOS with SDL2-compat backed by SDL3, the menu-input regression crashed inside
+`SDL3_PushEvent` while pushing its synthetic `SDL_TEXTINPUT`. A debugger backtrace
+and the loop index identified the text event before any client dispatch ran.
+In SDL2-compat's [`Event2to3`](https://github.com/libsdl-org/sdl2-compat/blob/main/src/sdl2_compat.c),
+text input conversion returns `NULL`; the affected `SDL_PushEvent` implementation
+passes that result to SDL3. This is a test injection failure, not a menu-routing failure.
+
+The regression queues a tagged `SDL_USEREVENT` marker and translates it into text
+after `SDL_PollEvent`, through `CL_TestPollMenuEvent`. `CL_InputEvents` runs the same
+production input pump with that polling adapter; normal `CL_Input` supplies
+`SDL_PollEvent` directly. Mouse and keyboard events still use the SDL queue, and
+the test still checks text contents and menu exclusion during active/loading
+world presentation, then delivery in the disconnected menu.
+
+Reproduce or verify the focused path after building `make openwarcraft3-tests test-assets`:
+
+```sh
+build/bin/openwarcraft3-tests -data build/tests +dedicated 1 \
+  +test client_input.menu_sdl_input_is_exclusive_with_world_presentation
+```
+
+### GitHub Actions jobs that never start
+
+A failed workflow can contain only cancelled jobs and no executed steps. Inspect check-run annotations before treating it as
+a build or test regression:
+
+```sh
+gh run view <run-id> --repo corepunch/open-realm --json conclusion,jobs
+gh api repos/corepunch/open-realm/check-runs/<check-run-id>/annotations
+```
+
+In [PR #585's CI run](https://github.com/corepunch/open-realm/actions/runs/37364440458), all four ordinary jobs were cancelled
+after about 15 minutes with empty step lists. Each reported `The job was not acquired by Runner of type hosted even after
+multiple attempts`. This identifies hosted-runner acquisition failure before checkout, compilation, or tests; rerun CI to
+obtain code validation. The accompanying Ubuntu migration notices were notices, not the failure. The EOS job was intentionally
+skipped by the fork-PR condition in `.github/workflows/c-cpp.yml`. See [CI build environment](https://github.com/corepunch/open-realm/blob/main/CONTRIBUTING.md#build-and-linking).
+
+### Local suite timing
+
+Run the full suite with timing:
+
+```sh
+/usr/bin/time -p make test TEST_JOBS=16
+```
+
+On macOS, `xctrace` requires the full Xcode developer directory when Command Line Tools is active:
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xctrace record \
+  --template 'Time Profiler' --time-limit 10s --output build/test.trace --launch -- \
+  build/bin/openwarcraft3-tests -data build/tests +dedicated 1 +test '*'
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xctrace export \
+  --input build/test.trace \
+  --xpath '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]' \
+  > build/test-time-profile.xml
+build/bin/xctraceprof --top 30 build/test-time-profile.xml
+```
+
+The final engine-test profile sampled `Test_Run` and showed `__bzero` as the largest leaf symbol, followed by JASS setup and test-specific work. This profile covers the engine-backed WC3 process; aggregate wall timing is required for the full multi-suite target.
+
+## Local macOS SDL event-test crash
+
+On 2026-10-22, the rebased state-refactor baseline passed CI and the complete
+`make test-wc3-engine WC3_PATTERN='wc3_*'` RoC/TFT gameplay suites, while local
+`make test` crashed in `client_input.menu_sdl_input_is_exclusive_with_world_presentation`.
+The macOS diagnostic report located the fault in `SDL_PushEvent_REAL` through
+Homebrew `sdl2-compat` and SDL3. Linking warned that this installed SDL runtime
+requires macOS 27.0 while the build targets 26.4; that warning is context, not a
+confirmed root cause. The same crash predates the component migration.
+
+Inspect `~/Library/Logs/DiagnosticReports/openwarcraft3-tests*.ips` for the actual
+faulting stack. This records completed tests before the fault:
+
+```sh
+TEST_SLOW_MS=0 TEST_SHARD=0/4 build/bin/openwarcraft3-tests -data build/tests +dedicated 1 +test '*'
+```
+
+The `wc3_*` filter verifies gameplay but excludes client-input coverage and must
+not be reported as a passing full suite. Sandbox-denied UDP sockets are a separate
+failure; rerun the full suite with socket access before attributing those assertions
+to code changes.

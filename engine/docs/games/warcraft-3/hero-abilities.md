@@ -1,0 +1,147 @@
+# Hero Ability Progression
+
+## Contract
+
+Hero skill progression is split across three sources of truth:
+
+- `UnitAbilities_t::abilList` — ordinary unit abilities already available to the unit.
+- `UnitAbilities_t::heroAbilList` — the ordered candidate skills a Hero may learn.
+- `AbilityData_t` — per-skill `levels`, `reqLevel`, and `levelSkip` progression data.
+
+Runtime learned Hero skills remain in `edict_t::unit_state->ranks[]`; one entry stores one ability rawcode and its current rank. `doodadHero_t::skillpoints` stores unspent Hero skill points.
+
+`heroAbilList` is not a list of already learned abilities. Learning rank 1 creates the runtime entry; later learning increments the same entry.
+
+## Progression
+
+A newly initialized Hero starts at level 1 with one skill point. Runtime-created Heroes use the same progression initializer after their object data is bound, so their level/point state does not depend on whether presentation-only UnitUI/model data is available. A map-placed Hero may already have a non-zero level from `war3mapUnits.doo`; because that file stores the level but not an unspent-point field, `G_HeroInitializeProgression()` seeds the level-derived point budget and subtracts any runtime Hero ranks that were already populated. This happens before authored map-script `SelectHeroSkill` calls consume the configured starting skills. `G_HeroSetXP()` grants one additional skill point for every later Hero level crossed and publishes both `EVENT_PLAYER_HERO_LEVEL` and `EVENT_UNIT_HERO_LEVEL` for each crossed level.
+
+The required Hero level for the next rank is:
+
+```text
+reqLevel + current_rank * levelSkip
+```
+
+When an ability has `levelSkip == 0`, `Misc/HeroAbilityLevelSkip` is used. The Warcraft default is 2 when the gameplay constant is unavailable.
+
+`G_HeroSkillState()` is the authoritative eligibility check. It verifies:
+
+1. the rawcode is present in the unit's `heroAbilList`;
+2. the ability exists in `AbilityData.slk` and has another rank;
+3. the player has not disabled the ability with `SetPlayerAbilityAvailable`;
+4. the Hero has an unspent skill point;
+5. the Hero meets the next-rank level requirement.
+
+`G_HeroLearnSkill()` performs that check, advances exactly one rank, and consumes exactly one point. Both the in-game `research` command and the JASS `SelectHeroSkill` native route through this function. Point mutation itself is centralized in `G_HeroModifySkillPoints()` so level-up grants, learned-skill consumption, and scripted point changes share the same non-negative storage and command-card invalidation.
+
+## Direct Skill-Point Scripting
+
+`common.j` exposes `GetHeroSkillPoints(unit)` and `UnitModifySkillPoints(unit, delta)`. The second argument is a signed **delta**, not an absolute value. Blizzard.j's `ModifyHeroSkillPoints` ADD/SUB/SET wrapper is implemented in terms of that delta native, including SET as `requested - GetHeroSkillPoints(hero)`.
+
+OpenRealm returns zero for `GetHeroSkillPoints` on a non-Hero and rejects `UnitModifySkillPoints` on a non-Hero. Positive deltas add unspent points (clamped to `INT32_MAX` so the JASS integer getter stays non-negative); negative deltas remove points and clamp at zero. Attempting another negative change when the pool is already zero returns false. Direct point changes do not alter Hero XP or level and do not publish Hero-level events.
+
+This means an initialization trigger may independently configure both progression axes, for example setting Hero XP/level and then adding extra unspent points before normal interaction starts. OpenRealm does not yet emulate retail's obscure positive `UnitModifySkillPoints` capacity limit based on the Hero's remaining learnable ranks: enforcing it before map/campaign object ability overrides are merged would incorrectly reject custom Hero skill trees.
+
+
+## Experience And Map Startup
+
+Hero XP is one progression state regardless of source. `AddHeroXP`, `SetHeroXP`, `SetHeroLevel`, kill XP, `AIem` experience items, and `AIlm` level items all converge on `G_HeroSetXP()` / `G_HeroXPForLevel()`. `SetHeroXP` is raise-only: asking for XP at or below the current value leaves both XP and level unchanged, matching the Warsmash contract and avoiding a high-level Hero with an XP total below its level threshold.
+
+`G_HeroXPForLevel()` reads the active `Misc/NeedHeroXP` per-level requirement table and extends it with `NeedHeroXPFormulaA/B/C` when the authored list is exhausted. The values are accumulated to produce the XP required to *reach* a Hero level. The stock TFT data authors `NeedHeroXP=200` plus formula values `A=1, B=100, C=0`; retail measurements give per-level requirements `200,300,400,...`, or cumulative thresholds `0,200,500,900,...` for levels 1, 2, 3, 4, .... OpenRealm recognizes that stock one-entry configuration and generates the measured linear sequence. The generic recurrence remains active for custom tables. If Misc data is unavailable entirely, OpenRealm also falls back directly to the stock per-level requirements. `war3mapMisc.txt` participates in the same loaded Misc cache, so map gameplay-constant overrides affect JASS, items, HUD progress, and level calculation through the same lookup.
+
+Kill XP first searches `HeroExpRange` for alive, non-illusion, XP-enabled Heroes owned by the killer or covered by the killer player's directional `ALLIANCE_SHARED_XP`. If no local receiver exists and `Misc/GlobalExperience` is enabled, the same eligibility check is repeated without the distance limit. This is a fallback, not an additional second award. `MaxLevelHeroesDrainExp=0` removes max-level Heroes from that recipient/divisor set; the stock value keeps them draining a share.
+
+Victim XP is data-driven from `GrantNormalXP` / `GrantHeroXP` and their A/B/C recurrence constants. Neutral-aggressive victims additionally use `HeroFactorXP[receivingHeroLevel-1]`; enemy player-controlled units and Heroes do not use the creep reduction, so level-5+ Heroes continue progressing from player units. Summoned victims apply `SummonedKillFactor`. `BuildingKillsGiveExp` checks the killing source, while passive enemy structures do not grant victim XP unless the structure has an authored attack. The final per-Hero award also applies that receiving player's XP handicap. The native `Get/SetPlayerHandicapXP` value is a multiplier (`1.0` means 100%); Blizzard's `Get/SetPlayerHandicapXPBJ` wrappers convert between that multiplier and percentage values.
+
+For a focused kill-XP runtime trace, start the game with `+set wc3_kill_xp_debug 1`. Each enemy death logs victim/killer identities and levels, the selected XP table result and range, rejected Hero candidates and reasons, the eligible receiver count/policy, and each recipient's modifiers and before/after XP. This is off by default; disable it with `wc3_kill_xp_debug 0` after capturing the relevant kills.
+
+There is no separate “starting XP” subsystem. Preplaced units exist before the map's `war3map.j` `main()` runs, so an initialization action may call `AddHeroXP`, `SetHeroXP`, or `SetHeroLevel` on an existing Hero and use the ordinary progression path before normal interaction begins. Trigger registration order still matters: a Hero-level handler only observes transitions published after that handler is registered. Campaign `StoreUnit`/`RestoreUnit` is a separate persistence path and preserves the resulting Hero progression across maps.
+
+## Skill Menu
+
+`skills/s_selectskill.c` enumerates `heroAbilList` in authored order. Each button is built with the next rank rather than hardcoded rank 1, so Research tooltip selection uses the rank being purchased and `%d` level placeholders are replaced with that next rank. Warcraft ability strings commonly store a quoted single ResearchTip; the shared list lexer must leave its cursor on the terminating NUL when that quoted item has no following comma. Advancing a missing comma produces the invalid `0x1` parser address and crashes when rank 2 asks for another list item.
+
+- level-locked skills remain visible but disabled and append `Requires: Level N`;
+- skills with no available points remain visible but disabled;
+- skills disabled by `SetPlayerAbilityAvailable` are omitted, and the same
+  availability check prevents `SelectHeroSkill` from learning them;
+- maxed skills are omitted from the learn menu;
+- Research UI fields, including the Research hotkey, are used for learn buttons.
+
+The ordinary command card treats `abilList` and `heroAbilList` independently: a Hero may have ordinary abilities and a Select Skill button at the same time.
+
+## JASS
+
+Implemented Hero-progression natives:
+
+- `GetHeroSkillPoints` reads the current unspent point pool.
+- `UnitModifySkillPoints` applies a signed delta without changing XP or Hero level.
+- `SetHeroXP` and `AddHeroXP` use the shared XP transition; `SetHeroXP` does not lower XP.
+- `SetHeroLevel` raises a Hero through `G_HeroSetXP()`, preserving XP-driven skill points and both Hero-level event families.
+- `UnitStripHeroLevel` removes up to the existing levels above 1 and returns whether any level was lost; `SetHeroLevelBJ` uses this path for reductions while retaining `SetHeroLevel` for increases.
+- `SelectHeroSkill` uses normal candidate/point/level/max-rank validation.
+- `GetUnitAbilityLevel` reports the current learned Hero rank and treats an ordinary ability listed in `abilList` as level 1.
+
+Runtime ordinary-ability membership from `UnitAddAbility` / `UnitRemoveAbility` is stored separately from the four Hero skill slots, and `G_UnitAbilityLevel()` now reflects those additions/removals as level 1 so command and spell ownership checks agree. Runtime rank mutation (`IncUnitAbilityLevel`, `DecUnitAbilityLevel`, `SetUnitAbilityLevel`) remains incomplete; do not silently treat `heroabilities[]` as an unlimited generic ability store.
+
+## Known Boundaries
+
+Map/campaign object modifications are only partially merged into typed runtime rows. `war3map.w3u` applies registered `UnitBalance`/`UnitProfile`/`UnitUI`/`UnitAbilities` fields such as `usst`, `uani`, `umdl`, `uabi`, `uhab`, and `udaa`, but Data/Weapons fields and `war3map.w3a`/campaign overrides for `levels`, `reqLevel`, `levelSkip`, or Research UI fields still require the broader object-data merge layer.
+
+`SetPlayerAbilityAvailable` has player-wide rawcode state plus shared runtime activation, learned-command-card, and Hero skill-learning gates. Disabling a learned Hero spell hides its command and rejects direct activation; disabling an unlearned skill omits it from Select Skill and rejects `SelectHeroSkill`. Passive/on-tick lifecycle removal remains ability-specific work.
+
+`SetHeroLevel` remains raise-only. `UnitStripHeroLevel` is a separate level-loss operation, including when requested via the engine's direct `SetHeroLevelBJ` wrapper. Non-Hero units, non-positive level counts, and level-1 Heroes return false; stripping more than the available levels clamps to level 1. XP is reduced to the cumulative threshold for the resulting level (or preserved if already smaller), using the same map-configurable Misc/NeedHeroXP source. Unlike `SetHeroXP` it deliberately permits XP reduction. No Hero level-up events or bot level-up callbacks are generated when stripping.
+
+Level loss subtracts only the old-to-new *level-derived* Strength/Agility/Intelligence growth, preserving other existing attribute changes, and recomputes HP/mana/armor/damage through the shared Hero stat path. The older raise-only `G_HeroApplyLevel` still derives attributes afresh from UnitBalance when leveling up; preserving scripted/tome deltas across a subsequent increase remains broader attribute-state work.
+
+For skill points, each removed level removes one unspent point if possible. If those points have been spent, it removes learned Hero ranks (not ordinary unit abilities) until the corresponding spent budget is reclaimed; ranks above the new level's data-driven `reqLevel + (rank - 1) * levelSkip` are unlearned first. Remaining ties use reverse runtime slot order, **not a proven retail skill-unlearning order**. The exact retail ordering, abnormal/scripted skill-point budgets, boolean outcomes for every boundary case, and XP fraction handling on level loss require a retail comparison. A Reforged PTR report from 15 October 2025 also identifies an ability-unlearning ordering defect; that reported bug is not treated as a compatibility contract. Passive ability cleanup after unlearning still depends on each ability's lifecycle support.
+
+Hero-level events are queued with the unit pointer rather than an immutable level payload. A multi-level XP gain publishes both player-unit and unit-specific events per crossed level, but handlers that run later observe the unit's then-current level; preserving an intermediate-level snapshot would require an event-context change.
+
+The JASS `showEyeCandy` arguments on `SetHeroXP`, `AddHeroXP`, and `SetHeroLevel` are still ignored. Level-up sound/light/portrait presentation needs a separate renderer/client presentation contract. Single-Hero tier XP bonus factors remain unimplemented; they need a reliable town-hall-tier and owned-Hero-count path rather than a kill-XP-only special case.
+
+The Select Skill command button displays the Hero's non-zero unspent skill-point count, and learn buttons display the next rank. Multi-selection suppression remains UI work.
+
+Campaign carry-over is now separate from Hero progression itself: `StoreUnit` and `RestoreUnit` preserve the Hero level, XP, unspent skill points, and learned ranks through the campaign game cache. See [campaign-game-cache.md](campaign-game-cache.md). Starting a later campaign map without a saved prior-map cache still uses that map's authored fallback Hero state.
+
+## Verification
+
+Focused in-engine tests live in `games/warcraft-3/game/tests/t_combat.c` and `games/warcraft-3/game/tests/t_api.c` and cover:
+
+- level-derived initial point budgets for map-placed Heroes;
+- stock `NeedHeroXP` cumulative thresholds and a fixture-authored table/formula extension;
+- one skill point per Hero level crossed;
+- player-unit and unit-specific Hero-level events for every crossed level;
+- raise-only XP semantics and level-strip XP clamping, attribute/stat preservation, minimum level, skill ranks, and no gain events;
+- `GlobalExperience` fallback when no eligible Hero is inside `HeroExpRange`;
+- creep reduction indexed by receiving Hero level and restricted to Neutral Aggressive victims;
+- summoned-victim XP factor, max-level drain toggle, building killer/victim rules, and receiving-player XP handicap;
+- lethal damage through the ordinary unit-death path with Prologue01's 300% XP handicap;
+- `GrantNormalXP` and `GrantHeroXP` formula extension beyond their authored tables;
+- JASS `main()` granting startup XP through the ordinary Hero progression path;
+- JASS `GetHeroSkillPoints` and signed `UnitModifySkillPoints` changes, including zero clamping and non-Hero rejection;
+- JASS `UnitStripHeroLevel` and engine `SetHeroLevelBJ` reduction and increase paths;
+- map-start direct skill-point awards that leave XP and level unchanged;
+- first-rank learning and point consumption;
+- no-point disabling;
+- `reqLevel + current_rank * levelSkip` rank gates;
+- maximum-rank rejection;
+- ultimate-style first-rank level gates;
+- rejection of skills not present in `heroAbilList`;
+- quoted single-value and quoted multi-value list parsing used by Research tooltips.
+
+Run the relevant suite when validating locally:
+
+```bash
+make test-wc3-engine WC3_PATTERN="wc3_combat.hero_*"
+make test-wc3-engine WC3_PATTERN="wc3_api.hero_strip_levels_*"
+make test-wc3-engine WC3_PATTERN="wc3_combat.grant_kill_xp_*"
+make test-wc3-engine WC3_PATTERN="wc3_api.hero_xp_*"
+make test-wc3-engine WC3_PATTERN="wc3_api.hero_skill_points_*"
+```
+
+## See Also
+
+- [Arthas Hero Abilities](arthas-abilities.md)
+- [Ability Identity and Cooldown Ownership](ability-system.md#rawcode-and-procedure-identity)
+- [JASS Native Coverage](https://github.com/corepunch/open-realm/blob/main/games/warcraft-3/jass-native-coverage.md)

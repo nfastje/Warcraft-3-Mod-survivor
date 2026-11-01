@@ -1,0 +1,777 @@
+# Inventory And World Items
+
+The inventory subsystem keeps one server-authoritative item entity as it moves
+between the world and an ability-defined unit inventory. The same edict is
+retained across pickup and drop; normal transitions do not destroy and recreate
+it. `MAX_INVENTORY` remains the six-slot storage/UI ceiling, while gameplay
+capacity comes from the unit's inventory ability.
+
+## Inventory ownership on forced unit removal
+
+`RemoveUnit` defers edict destruction until the current simulation tick has
+finished. Immediately before `G_PoolsReleaseEdict`, the WC3 game module retires
+all items still carried by the unit via `G_ReleaseInventoryOnUnitRemoval`.
+The cleanup also finds script-detached items whose inventory slot was cleared
+but whose carrier pointer still names the unit. These items do **not** become
+world drops; the `inv2` drop-on-death rule is separate. Items already given to
+other carriers survive. Pending consumed-item event handles remain alive, but
+cannot finalize against a carrier that has been removed or recycled.
+
+See [campaign game cache](campaign-game-cache.md#rexxar-stash-temporary-carrier-removal-patch-b)
+for Rexxar's hidden `Obla` stash-export sequence and the regression coverage.
+
+See [Rexxar's Stash](rexxar-stash.md) for a map-authored non-Hero storage building, Backpack activation, and live inventory refresh after researched tech changes.
+
+## Powerup collection and inventory permissions (Rexxar hardening)
+
+An inventory ability can have **zero item slots** (`inv1=0`) while still
+allowing a hero or unit to collect powerups. Zero slots reject ordinary carried
+items, but an item with a supported automatic powerup ability may be consumed
+without entering an inventory slot when **Can Use Items** (`inv3`) is enabled.
+Ability-less quest powerups (such as Shimmerweed) follow the same slot-free
+pickup response when item use is enabled. This does not create inventory slots
+for the recipient.
+
+When `inv3=0`, an inventory-capable carrier such as a Backpack courier or
+Rexxar's stash **does not automatically consume** the powerup. It can hold the
+item in a free slot instead; if every slot is occupied, the pickup order is
+rejected and the item remains in the world. Direct scripted insertion still
+uses the existing native inventory API. This keeps the distinction between
+`inv3` (automatic use), `inv4` (player pickup permission), and `inv5`
+(player-issued drop/handoff permission). A pickup order reevaluates `inv4`
+on arrival, so removing that permission mid-walk cancels the order without
+collecting the item. Deferred unit removal also prevents new pickup.
+
+Regression fixtures cover zero-slot powerups, carrying rune and ability-less
+powerup items without use permission, full inventory rejection, a revoked
+`inv4` while walking, and a pending item-give order across `WriteGame` /
+`ReadGame`. Original OrcX01 `Aion` ability fields remain unverified:
+these are generic rules, not hardcoded values for `h003`.
+
+## State Contract
+
+Item lifecycle state lives on the game edict alongside the existing unit
+inventory pointers.
+
+| State | `carrier` | `inventory_slot` | `in_world` | Presentation |
+| --- | --- | ---: | --- | --- |
+| World | `NULL` | `-1` | `true` | Linked, visible, sent to clients |
+| Carried | Unit edict | valid slot | `false` | Unlinked, `RF_HIDDEN`, `SVF_NOCLIENT`; shown by inventory UI |
+
+The item edict also owns its mutable charge count. `SP_SpawnItem` initializes
+`item.charges` from ItemData `uses` (`iuse`); pickup and drop preserve it.
+`GetItemCharges` and `SetItemCharges` read and update that same runtime state.
+
+For a carried item, the carrier's matching inventory slot must point back to
+the item. `G_AddItemToSlot`, `G_PickupItem`, `G_DropItemAt`, `G_DropItem`, and
+`G_RemoveItem` own the world/inventory relationship.
+
+## Blizzard.j Item Drop Helpers
+
+`UnitDropItem(unit, itemId)` and `WidgetDropItem(widget, itemId)` are **Blizzard.j
+script functions**, not the native `UnitDropItemPoint` inventory operation. OpenRealm
+loads the retail `Scripts\Blizzard.j` before the map script, so no separate C
+implementation or additional game-owned loot store is needed.
+
+- Both return `null` for item ID `-1`. Otherwise they roll independent
+  `GetRandomReal(position - 32, position + 32)` values for X and Y, call
+  `CreateItem`, and return the *new* world item. They do not remove or transfer
+  an item from inventory and do not trigger item-acquisition or -drop events.
+- `UnitDropItem` additionally sets `SetItemDropID(newItem, GetUnitTypeId(unit))`
+  and invokes `UpdateStockAvailability(newItem)`. That BJ helper compares the
+  authored `GetItemType` value against `ITEM_TYPE_PERMANENT`, `ITEM_TYPE_CHARGED`,
+  and `ITEM_TYPE_ARTIFACT` and enables the corresponding `bj_stockAllowed*`
+  array index using `GetItemLevel`.
+- `WidgetDropItem` intentionally does **not** set drop ID or update stock.
+  Its position getters accept units, destructables, and items as widgets,
+  including dying source widgets that remain accessible during death triggers.
+- `itemtype` is an enum-style JASS handle: distinct native handles with the
+  same itemtype value must compare equal. This is required for
+  `UpdateStockAvailability` to work; arbitrary entity/widget handles retain
+  identity-based comparisons.
+
+The synthetic test archive contains minimal matching Blizzard.j wrappers only
+for executable regression coverage; production behavior continues to use the
+installed game's Blizzard.j. `wc3_items.blizzard_unit_and_widget_drop_item_create_world_loot`
+checks offsets, handle separation, the `-1` sentinel, the unit-only drop ID,
+stock eligibility and creation without inventory occupancy. Destructable
+loot-trigger integration and source-lifetime edge cases remain separately
+subject to map/runtime coverage; these wrappers do not force pathable drops.
+
+## Inventory Capability And Capacity
+
+Inventory is ability-defined, not hero-defined. `G_InventoryCapacity` scans the
+unit's normal ability list for an ability whose AbilityData `code` is `AInv`.
+Its first data slot is Warcraft III field `inv1` (Item Capacity). `AB_Data`
+resolves the archive-version spelling (`Data11` in ROC, `DataA1` in TFT).
+Capacity is clamped to the six-slot OpenRealm storage/UI ceiling.
+
+Reign of Chaos heroes have one compatibility exception. On ROC maps
+(`war3map.w3i` format version `<= 24`), a hero without an authored inventory
+ability receives stock `AInv` capacity. Classic ROC archives omit that row;
+in that case the built-in hero inventory has six slots and supports item use,
+pickup and drop, retaining items on death. This also applies to an explicit
+`AInv` on a ROC hero when its data row is absent. An existing `AInv` row remains
+authoritative, including zero capacity. TFT-format maps and non-heroes do not
+receive this missing-row default. Explicit custom inventory abilities and
+Backpack upgrade gates retain their authored behavior.
+
+Consequently a normal hero inventory resolves to six slots, while a custom
+inventory ability may expose fewer slots. Pickup, explicit slot insertion,
+client item use/drop commands, JASS slot operations, and HUD enumeration all
+respect the resolved capacity.
+
+### ROC hero checkerboards: attribute bonus mistaken for inventory
+
+The five magenta slots reported on Undead04 came from incorrect capacity, not
+missing item icons. `07cc8967` classified `AIab` as a ROC inventory alias and
+scanned for its first positive Data A value when `AInv` was absent. Retail ROC
+`Units/AbilityData.slk` lists `AIa1` first: its code is `AIab`, its name is
+`AgilityBonus (+1)`, and `Data11=1`. `AIa6` is likewise `AgilityBonus (+6)`.
+Both the extracted demo and TFT class registries identify `AIab` as
+`CAbilityAttributeBonus`; only `AInv` is `CAbilityInventory`.
+
+That scan gave Arthas one slot and caused `WriteInventory` to request five
+`ConsoleInventoryNoCapacity` overlays. The inspected ROC `UI/war3skins.txt`
+does not define that key, producing a logged unresolved image and the magenta
+placeholder. Correcting the inventory classification and classic hero default
+removes those erroneous overlays. It does not supply missing blocked-slot art
+for custom reduced-capacity inventories using this old skin table.
+
+`wc3_items.roc_hero_inventory_does_not_read_attribute_bonus_as_capacity` uses
+the ROC `Data11` schema with `AIa1`, `AIa3`, and `AIa6`, with no `AInv` row.
+It drives capacity, item permissions, selection and `G_RefreshInventoryLayer`
+for implicit and explicit hero inventory, asserting six slots and no blocked-slot
+texture requests. Companion tests exclude attribute bonuses from non-hero
+inventory and preserve custom four-slot and zero-slot capacities. Existing
+`DataA1` fixtures cover TFT inventory and Backpack permissions.
+
+A bounded ROC framebuffer check used an Undead04 diagnostic copy with mission
+triggers disabled, created level-4 `Uear` for player 3, added `ktrm` in slot 0,
+and selected him. `screenshot 30` with `+com_frame_limit 200` showed that item
+and five normal empty slots, with no `ConsoleInventoryNoCapacity` request.
+The native terrain and ROC archive assets were unchanged; no mission progression
+or save/load behavior was inferred from this visual check.
+
+Run `make test-wc3-engine WC3_PATTERN='wc3_items.*'`. To inspect the native
+evidence without launching the game:
+
+```sh
+build/bin/mpqtool -mpq 'data/Warcraft III/War3.mpq' cat Units/AbilityData.slk
+build/bin/mpqtool -mpq 'data/Warcraft III/War3.mpq' cat UI/war3skins.txt
+rg 'AIab|AInv' games/warcraft-3/{demo,tft}-ability-classes.txt
+```
+
+## Contextual Pickup
+
+A client right-click still produces the existing `smart <entity>` command.
+The server recognizes a world item before harvest, attack, or move handling and
+starts a pickup order for each selected inventory-capable unit.
+
+Smart target dispatch is per selected unit, not per primary subgroup. The
+server walks every controllable selected unit and asks its normal Smart resolver
+to accept the same item target. A Footman rejecting the item therefore does not
+veto a later selected Hero: the Hero's inventory capability starts the pickup
+order, while the Footman receives no replacement order. This is especially
+important for ROC campaign heroes whose implicit `AInv` fallback is not present
+in `UnitAbilities.slk`.
+
+The order keeps the item as its goal and checks it every simulation tick. It
+moves while the center-to-center distance is greater than
+`ITEM_PICKUP_RANGE` (150 world units), then attempts the authoritative
+inventory transition. The order stops if the item was removed, hidden, picked
+up by another unit, or otherwise left world state.
+
+When every slot exposed by the inventory ability is occupied, the transition
+does not modify either entity. The world item stays linked and visible, and
+contextual pickup displays an `Inventory is full.` message to the owning player.
+
+## Active Item Use
+
+The focused-unit `inventory <slot>` command resolves the carried item's
+`abilList` from the normalized `ItemData_t` row in authored order and dispatches
+the first registered item ability it can handle. This matters because
+`abilList` is an `ItemData.slk` field; `FindConfigValue` searches TXT/INI
+configuration and therefore cannot be the primary lookup for a real carried
+item. A TXT/INI lookup remains only as a fallback when the typed field is
+absent. Immediate effects declare `AB_ITEM` and handle `A_ITEM_USE`, which returns
+true only when the gameplay effect actually applies. Current handlers cover the
+existing heal, mana, permanent-life/stat, experience/level, and figurine item
+abilities, plus stock item-defense AOE (`AIda`, used by Scroll of Protection).
+Their successful presentation uses the same ability `TargetArt`
+resolver documented in [Ability, Buff, And Item Presentation Effects](ability-and-item-effects.md).
+
+For `AIda`, OpenRealm reads the authored defense amount, area, normal/hero
+duration, target mask and BuffID. Eligible friendly units receive the timed
+`Bdef` status. Combat armor calculation and the displayed armor value both
+include the status bonus while it is live, so normal status expiration removes
+the bonus automatically.
+
+Successful item uses complete through `G_CompleteItemUse`, which publishes
+`EVENT_PLAYER_UNIT_USE_ITEM` and `EVENT_UNIT_USE_ITEM` with the used item as the
+event source and then applies charge/perishable semantics. Failed uses (for
+example, healing an already full-health unit) publish neither event and consume
+no charge. A successful charged-item use decrements a positive runtime charge
+count. Non-perishable items remain present at zero charges. A final perishable
+charge detaches the item from gameplay immediately but keeps its edict/handle
+alive until queued use-item events and any sleeping JASS action carrying that
+event context have finished; this keeps `GetManipulatedItem()` valid while the
+trigger responds to the use. The retained item is then retired automatically.
+
+Item abilities that enter the shared spell targeting command now bind their
+originating inventory item to that command. Unit-target abilities preserve the
+item plus spawn generation while walking into cast range. Charge consumption
+and use-item events occur only after successful `A_EXECUTE`; rejected targets,
+interrupted approaches, and stale/moved source items do not consume the item.
+The same completion hook is used for point/no-target spell commands where the
+shared spell pipeline can report execution success.
+
+`SetItemDroppable` supplies a runtime override of authored `ItemData.droppable`.
+Player/manual drop paths honor that effective value. Explicit JASS inventory
+manipulation can move an undroppable quest item deliberately. A missing
+ItemData row is logged and rejects dropping instead of silently treating the
+item as droppable. Drop-on-death remains a separate inventory policy, matching
+Warcraft's distinct droppable and death-drop controls. Synthetic tests that
+replace `ItemData.slk` must include the `droppable` column and set it on rows
+whose scenario expects player drops; an omitted boolean parses as false and
+correctly blocks the manual drop path.
+
+## Soul Gem (`gsou` / `soul`, `AIso` / `Asou`)
+
+Soul Trap is owned by `CAbilitySoulTrap` in `skills/s_item.c`. `gsou` supplies
+the targeted `AIso` ability; successful execution follows the shared spell
+target and range checks, then binds the existing target edict to the carrier.
+The stock `AIso` target mask (`enemy,ground,hero`) selects enemy Heroes through
+authored data. The handler does not hard-code a Hero check, so custom target
+masks remain usable.
+
+Capture does not enter `unit_die`, change ownership, or replace the unit handle.
+It records a carrier-owned linked list and a target-side carrier pointer with
+spawn generations, marks the target `AI_SOUL_TRAPPED`, cancels its current
+orders/channel, hides and unlinks it, and clears selection. `G_RunEntity` skips
+world movement and unit think while trapped; status timers and construction or
+upgrade progress still use their normal paths. The shared `G_UnitIsWorldActive`
+check keeps trapped units out of selection, control, spell targeting, and
+region-touch processing. The target remains alive with its original health and
+JASS handle.
+
+The carrier receives the `Asou` lifecycle ability. Its death releases every
+bound target at the carrier's death coordinates, removes the corresponding
+filled `soul` item, and clears the forced reveal. Removing `Asou` from the
+trapped target also ends the relationship; Orc08 uses this during its Jaina
+ritual sequence, then moves Grom and runs its campaign-specific presentation.
+Removing a carrier without death uses relationship cleanup so targets are not
+left orphaned. There is no generic duration timer.
+
+The filled item cannot be dropped, including through scripted point-drop or
+death-drop paths. Orc08's cinematic swaps the item through `UnitRemoveItem`
+and `UnitAddItem`; removal temporarily detaches it from its slot while keeping
+its carrier binding, and only that carrier can put it back. This does not expose
+the item as a world pickup or permit transfer.
+
+The carrier receives a generic unit-specific forced-visibility reference for
+the trapped Hero's owner. Fog queries apply that reference before ordinary
+invisibility checks and resolve shared vision through the normal alliance
+rules. The reveal follows carrier movement and does not mark surrounding fog
+cells visible or explored. It ends when the relationship is removed.
+
+Final-charge item use must preserve the `GetManipulatedItem()` handle while
+JASS handles `EVENT_PLAYER_UNIT_USE_ITEM`. `G_CompleteItemUse` detaches the
+perishable `gsou` immediately but retains its edict while a use event or sleeping
+JASS response references it. After the response finishes,
+`S_SoulTrapFinalizeConsumedItem` binds the map-created `soul` item to that
+specific trapped target (or creates one from the `soul` ItemData row when no
+script created it), then makes the filled item nondroppable. Each item and
+target retain their own link, so multiple traps do not share one filled item.
+
+The local War3local `Orc08.w3m` script confirms these integration points:
+
+- `Trig_Thrall_Uses_Soul_Gem_Gets_Soul` listens for Player 0's use-item event,
+  waits 0.10 seconds, adds `soul` to Thrall, makes it nondroppable, and completes
+  the Grom capture objective.
+- The ritual path removes the filled item and removes `Asou` from `udg_Grom`
+  before moving or replacing Grom.
+- `Trig_Grom_Dead` calls `ReviveHeroLoc` with the Grom-pop rectangle center.
+  The JASS native now delegates to `G_ReviveHero`, preserving the unit edict and
+  restoring its live Hero state at that location.
+
+The focused tests are `wc3_items.soul_gem*`,
+`wc3_items.consumed_perishable*`, `wc3_api.revive_hero_location*`, and
+`wc3_save.soul_trap_links*`; `wc3_items.soul_trap_remove_target_cleans_bound_item`
+also covers cleanup when the trapped target is removed, and
+`wc3_items.soul_gem_pending_approach_round_trips_save` covers a pending targeted
+cast across save/load. They run against both ROC and TFT fixture schemas.
+They cover target-mode entry, stock target filtering, no death event, the
+Orc08-style scripted filled-item slot swap, delayed use-event identity, visibility,
+multiple captures on one carrier, carrier-death release, and relationship
+save/load. Run them with:
+
+```sh
+make test-wc3-engine WC3_PATTERN='wc3_items.soul_gem*'
+make test-wc3-engine WC3_PATTERN='wc3_items.consumed_perishable*'
+make test-wc3-engine WC3_PATTERN='wc3_api.revive_hero_location*'
+make test-wc3-engine WC3_PATTERN='wc3_save.soul_trap_links*'
+make test-wc3-engine WC3_PATTERN='wc3_items.orc08_scripted_soul_slot_swap*'
+make test-wc3-engine WC3_PATTERN='wc3_items.missing_item_data*'
+```
+
+## Inventory Presentation
+
+The HUD has no item-specific branches. `G_GetInventory` walks only the selected
+unit's exposed slots and `G_BuildInventoryItem` resolves presentation by the
+carried item's rawcode through the already-loaded Warcraft III UI config tables:
+
+```text
+item rawcode
+    -> ItemFunc.txt / ItemStrings.txt
+    -> Art / Tip / Ubertip
+    -> gameInventoryItem_t
+    -> LAYER_INVENTORY command button
+```
+
+`Art` is passed through the same theme indirection used by command-card art and
+then registered through `gi.ImageIndex` when the server authors the inventory
+frame. The parsed INI tables and image registry are already persistent engine
+state, so no second item-UI cache is maintained.
+
+The runtime charge count is copied into `gameInventoryItem_t`. `WriteInventory`
+draws a bottom-right number overlay whenever `charges > 0`, including a
+single-charge item. A zero-charge non-perishable item therefore keeps its icon
+but has no number overlay. Successful synchronous use of a perishable item now
+consumes its runtime charge and removes the item at zero; cooldown/disabled-state
+presentation remains separate active-item work.
+
+For Human02 this means a carried Scroll of Protection is handled generically:
+rawcode `spro` resolves its item UI data, appears in the first free slot, and
+shows its initial charge count of `1`. No HUD code checks for `spro`.
+
+### Selected-unit inventory panel state
+
+Inventory visibility is capability-defined independently of hero presentation.
+For any non-empty selection, `LAYER_INVENTORY` resolves the current focused unit
+through `G_GetMainSelectedUnit()` and authors that unit's inventory state. A
+multi-selection never merges inventories and does not search for the first unit
+that happens to have inventory capacity: focusing a Footman covers the inventory
+area, while focusing a Hero in the same still-selected group immediately authors
+that Hero's slots. `inventory <slot>` and `dropitem <slot>` already use the same
+focused-unit lookup, so the displayed inventory and the unit receiving the item
+action stay aligned.
+
+The focused unit authors one of three states:
+
+- capacity `0`: cover the underlying six-slot console area with the local
+  player's race-skin `ConsoleInventoryCoverTexture`;
+- capacity `1..5`: leave the valid slots visible and cover each slot outside
+  capacity with `ConsoleInventoryNoCapacity`;
+- capacity `6`: leave all six normal slots visible.
+
+Both texture keys come from `UI\war3skins.txt`, using the local player's race
+section with `Default` fallback. Classic ROC data used by OpenRealm does not
+provide a usable inventory-cover FDF, so the cover is one of the WC3 native
+frames constructed in C: a static `FRAMEDEF` owns the confirmed texture crop,
+`ALPHAKEY` mode, `0.128 x 0.175` size, and bottom-right screen anchor. No
+project-owned production FDF is shipped. The selected unit determines inventory
+capability and contents; the local player's console skin determines cover/filler
+artwork. Hero/non-hero stats remain an independent info-panel decision.
+
+The cover samples only the useful lower portion of the packed console BLP
+(`V=0.380859375..1.0`) rather than squeezing the complete image canvas into the
+frame. This crop came from the bounded runtime asset diagnostic that established
+the useful pixels begin at row 195 of the 512-pixel source image.
+
+Stock non-hero inventory abilities are capability-gated by their Backpack
+upgrade rather than becoming active merely because the alias appears in
+`UnitAbilities.slk`. For example, the Footman carries `Aihn` in its authored
+ability list, but its two inventory slots remain covered until Human Backpack
+`Rhpm` is researched. The same rule applies to the stock Orc, Night Elf and
+Undead unit-inventory variants. Plain `AInv` and custom `AInv`-derived inventory
+abilities are not implicitly gated.
+
+Inventory ability Data B through Data E are authoritative runtime permissions:
+
+- `inv2` / Data B (`Drop Items On Death`) releases carried items when the carrier dies;
+- `inv3` / Data C (`Can Use Items`) gates active item commands and carried passive abilities;
+- `inv4` / Data D (`Can Get Items`) gates player-issued pickup orders; and
+- `inv5` / Data E (`Can Drop Items`) gates player-issued drop/handoff/pawn orders.
+
+A carrier with `inv3=0` can still transport items without receiving their
+abilities. A carrier with `inv2=1` releases each carried item into world state at
+its death position without playing a manual-drop response sound. `inv4` and
+`inv5` are deliberately order permissions, not absolute mutation locks: direct
+JASS/native add/remove operations still use the underlying pickup/drop primitive,
+matching Warsmash's distinction between order validation and scripted
+`giveItem`/`dropItem`. The stock Backpack contract uses these fields for ordinary
+carriers, whereas Hero `AInv` enables normal player inventory interaction and
+retains inventory through death.
+
+`UpgradeData.slk` is now normalized for research costs/times and its four
+effect slots, with `ratx`, `ratd`, and `rarm` implemented generically for Blacksmith-style
+stat research. The stock inventory-ability-to-Backpack relationships remain a
+small explicit table in `g_items.c` because that Backpack effect has not yet been
+moved onto the generic upgrade-effect dispatcher.
+
+## Inventory Refresh Lifecycle
+
+Player/client edicts occupy the reserved `[0, max_clients)` range and are not
+ordinary `inuse` gameplay entities. Inventory refresh therefore iterates those
+reserved client slots and gates on the explicit `GAMECLIENT.connected` state.
+`G_ClientBegin` marks the slot connected after the handshake, while map-player
+initialization clears the state before the next map begins.
+
+A previous refresh path incorrectly required the reserved player edict itself to
+be `inuse`. Pickup still completed, but the refresh was skipped and the server
+never resent `LAYER_INVENTORY`.
+
+Item-state changes refresh only `LAYER_INVENTORY` through
+`G_RefreshInventoryLayer`. They do not rebuild the portrait or info panel. This
+keeps item transitions independent of unrelated portrait/FDF presentation and
+avoids requiring a full selected-unit HUD rebuild merely because an item moved
+or its charge count changed.
+
+The bounded diagnostic for this boundary is:
+
+```text
++set sv_debug_layout 1 +com_frame_limit 100
+```
+
+A successful carried-item refresh should produce a new `layer=6` layout write;
+an occupied item contributes at least one textured command-button frame.
+
+## Drop And Script Paths
+
+`G_DropItemAt` performs the inverse transition and places the same item edict
+at a requested world position. `G_DropItem` uses the carrier's current position.
+The existing JASS natives route through this lifecycle:
+
+- `UnitAddItem`
+- `UnitAddItemById`
+- `UnitAddItemToSlotById`
+- `UnitRemoveItem`
+- `UnitRemoveItemFromSlot`
+- `RemoveItem`
+- `SetItemPosition` for items already in world state
+- `GetItemCharges`
+- `SetItemCharges`
+
+`SetItemDropID` is a metadata-only native. It stores the unit rawcode used by
+later item-drop logic on the item instance; it does not move the item, change
+inventory ownership, or refresh the inventory layer.
+
+The client command `dropitem <slot>` remains a direct zero-based drop-at-feet
+path for the main selected unit. Inventory buttons now also use the existing
+command-button secondary/right-click channel: right-clicking an occupied slot
+sends `itemdrag <slot>` and enters a server-owned point-target mode. The next
+left-click on terrain starts a real drop behavior for that exact item instance.
+If the requested point is farther than `ITEM_DROP_RANGE`, the carrier walks
+into range before releasing the item; the behavior revalidates the carried item
+on each tick. A successful point drop removes passive item effects, unhides and
+relinks the same item entity, and runs the requested point through the shared
+WC3 deterministic unstuck search before placing it. Right-click or the normal
+Cancel command leaves the target mode without dropping the item.
+
+When a usable neutral item shop is selected, its inventory layer intentionally presents the resolved nearby patron's inventory.
+The same patron resolution is used by inventory use/drag/drop commands so the visible slots continue to address their authoritative
+carrier. Shop purchase, stock, and pawn rules are documented separately in [Neutral Shops And Mercenary Camps](neutral-shops.md).
+
+This slice intentionally does not yet implement Warsmash's held-item cursor
+art, inventory-slot swapping, or allied-unit give-item targeting. Inventory
+Data D/Data E (`CanGetItems` / `CanDropItems`) are enforced on player orders
+while direct script/native insertion and removal continue to bypass those
+order permissions.
+
+Successful transitions and carried-item charge changes refresh the inventory
+layer for clients currently selecting the carrier. Hidden entities are also
+excluded from renderer hit and rectangle tests while snapshot removal is in
+flight.
+
+## Phase Boundary
+
+This slice includes generic item icon/tooltips, ability-defined capacity,
+runtime/displayed charges, successful synchronous use of the existing
+immediate item ability handlers, and point-target item completion when
+Inventory Data C permits item use. Point-target items retain their exact item
+entity through target mode: invalid points or Cancel spend nothing, while a
+successful shared spell execution publishes item-use events and consumes one
+charge. Perishable successful uses destroy the item at zero.
+Passive item effects attach on inventory entry only for carriers whose
+Inventory ability permits item use; held orb/poison attack hooks use the same
+permission. Detach/removal always reverses an effect that was already applied,
+even if `CanUseItems` changed while the item was carried, so permission changes
+cannot leak a permanent stat bonus.
+
+Automatic acquisition/use is implemented for the supported Speed (`AIsp`/`AIsa`/`APsa`), Gold (`AIgo`), Lumber (`AIlu`), Area Healing (`AIha`), Area Mana (`AImr`/`APmr`/`APmg`), Area Restoration (`AIra`), and Resurrection (`APrl`/`APrr`) powerups: these items bypass inventory capacity, execute against the actual picking unit, publish pickup/use events, and are consumed without occupying a slot. An `AB_POWERUP` flag on the ability registry row selects supported ability-driven powerups. An ItemData `powerup` item with no `abilList` (including `_`) is also collected without an inventory slot, even when its `usable` and `uses` values are zero. This publishes pickup events with a live item handle before deferred removal, without inventing a use-item event or an ability effect. Most flagged powerups are consumed on touch even when no unit qualifies (for example a mechanical picker of a speed rune). Speed uses authored timed effects, and any rawcode whose AbilityData `code` is a speed procedure gets the `Misc.MaxUnitSpeed` cap; Gold and Lumber use their authored `DataA` resource grants (not upkeep-taxed harvesting income); `AIlu` also supports negative custom-map amounts clamped to zero; Area Healing uses authored `DataA`, `Area`, and target masks, consuming runes even if every valid recipient is at full health; Area Mana uses authored `DataA`, `Area`, and target masks to restore mana to nearby friendly units, capped at each recipient's maximum mana, and consumes even with no missing mana; Area Restoration uses authored `DataA` (health), `DataB` (mana), `Area`, and `targs`, restoring both independently with one area scan and consuming at full resources; Resurrection uses authored `DataA` and `Area`, permanently revives nearby friendly non-Hero/non-structure corpses at full life, and leaves the rune in the world with a failed-use message when no eligible corpse is nearby. Powerups with unsupported nonempty ability lists remain on the normal inventory path until their gameplay handlers are implemented; silently consuming them would discard authored effects.
+
+Rune of Shielding (`rsps`, `ANse`) shares this slot-free pickup/use lifecycle.
+It applies a permanent one-charge `BNss` buff to eligible nearby allies and
+consumes even if none qualify. The shared hostile unit-target spell guard consumes
+the shield once, including for Thunder Bolt, Fire Bolt, and Death Coil missiles at impact. It does not grant the Amulet's
+`ANss` cooldown/rearming ability; physical nets and point/area/beneficial spells
+remain unaffected.
+ Still missing are general automatic `powerup` acquisition/use beyond that supported family, `cooldownID`/`ignoreCD`
+item cooldowns and disabled icons, held-item cursor art, slot swapping, and
+allied-unit giving. Soul Trap implements the stock target/capture/reveal/release
+flow; unusual custom `AIso` targets and their subsystem-specific behavior still
+need parity coverage. See [Land Mines](land-mines.md) for the point-target
+completion contract exercised by `AIpm`.
+
+The implementation is derived from observable behavior and Warcraft III data
+formats described by the clean-room specification. It does not depend on
+another engine's item implementation.
+
+## Validation
+
+The `wc3_items.*` in-engine tests cover world-state initialization, data-driven
+capacity (including reduced, zero, above-storage-limit, and implicit ROC Hero
+`AInv` cases),
+first-empty-slot insertion,
+full-inventory failure, pickup range and revalidation, drop identity, point-drop
+deferred execution/movement/revalidation, save/load of the active drop-item pointer, renderer
+visibility flags, carried-item removal, connection-state refresh gating, charge
+initialization/preservation, carried-charge refresh/no-op behavior, perishable
+use decrement/removal, non-perishable decrement-without-removal behavior, point-target item
+charge deferral across invalid/successful location selection, JASS charge access,
+and generic `spro` Art/Tip/Ubertip/charge presentation.
+`SetItemDropID` coverage includes rawcode overwrite, null-handle tolerance,
+inventory/drop preservation, and setter-to-save/load round trips.
+They also cover mixed-selection Smart pickup where a non-inventory unit is the
+first selected entity and a later ROC Hero must still receive the item order,
+Human Backpack carriers refusing active item use, and Data B death policy where
+a non-Hero carrier drops its items while Hero inventory retains them.
+Minimal `AbilityData.slk`, `UnitAbilities.slk`, `ItemData.slk`, `ItemFunc.txt`,
+`ItemStrings.txt`, and `war3skins.txt` fixtures keep these tests data-driven in
+both ROC and TFT test runs. Inventory-panel tests additionally cover the
+no-inventory cover, reduced-capacity fillers, full-capacity absence of fillers,
+race-skin selection, and the native cover frame's crop/geometry. Synthetic
+ability-only unit IDs such as `H001` have no `UnitBalance` life value, so the
+shared test-unit allocator initializes a minimum positive life value without
+weakening the runtime rule that zero-life units are corpses and cannot be selected.
+
+`AIat` is represented as `unitAttack_t.temporaryDamageBonus`, so it survives Hero stat recomputation and is rendered as a separate green/red attack modifier. `AIde` uses `temporary_armor_bonus` so Hero Agility recomputation likewise preserves item armor. See [Attack Damage](attack-damage.md).
+
+## Held-item cursor
+
+Right-clicking an inventory button sends `itemdrag <slot>`. The command records
+that item and its spawn generation. Cursor presentation registers its authored
+`Art` and renders the race/CustomSkin cursor's HoldItem sequence, replacing only
+MDX slot 21. Cancel, accepted drop, source removal and save/load clear the
+transient presentation. Scroll arrows and modal windows temporarily supersede
+the held icon. See [cursor integration](cursor-rendering.md#race-targeting-and-held-item-integration)
+for transport, renderer ownership and regression commands.
+
+The Signal cursor is a separate overlay: `cmd signal` preserves the held item,
+and Esc/right click or an accepted signal point restores its icon and command.
+
+## Unit-to-Unit Item Handoff
+
+An item dragged from inventory onto an allied inventory-capable unit uses the
+same server-side target order as the `UnitDropItemTarget(unit, item, widget)`
+JASS native. It applies to non-hero inventory containers (including stationary
+buildings), not only Heroes. An unsupported target leaves the client in target
+mode; neutral shop pawn handling remains on the existing shop path.
+
+`G_OrderGiveItemTarget` validates an active, living allied recipient, the
+source's `inv5` permission, the item's droppable state and any item-ability
+prohibition. The source walks toward the target; an immobile inventory source
+such as a stash building can give directly when the recipient is already in
+range. Completion revalidates both unit and item state and uses
+`Misc.GiveItemRange` plus unit collision radii. The recipient does not move.
+A full recipient's inventory causes a normal
+world drop at its position. The item is not transferred when the order is
+issued, and an invalidated target/item cancels without changing inventory.
+
+`G_TransferCarriedItem` performs a direct, atomic transfer of an already-carried
+item entity: first verify both owner/slot and a free target slot, then remove
+source item stats, change the carrier and slot exactly once, apply eligible
+recipient stats, refresh both HUD inventories, and publish recipient pickup
+events. Player-ordered handoffs additionally enqueue a giver drop event before
+the recipient pickup events; scripted transfers do not synthesize a giver drop.
+No new item entity or temporary world item is created. The recipient's
+`inv4` flag is not applied to an incoming handoff: that flag gates the
+recipient's own pickup orders, whereas its inventory capacity governs whether
+it can receive items. The player order checks the *giver's* `inv5` and item
+droppability. By contrast, scripted `UnitAddItem` may transfer an already-carried
+item through the same primitive without imposing player-order drop restrictions.
+It still honours special scripted item reattachment before general transfer.
+`UnitDropItemTarget` queues the normal handoff rather than teleporting the item.
+
+These behaviours are exercised by `wc3_items.carried_item_transfer*`,
+`wc3_items.targeted_give*`,
+`wc3_api.unit_add_item_transfers_carried_handle_without_ground_drop`, and
+`wc3_api.unit_drop_item_target_queues_a_targeted_give`. Campaign `StoreUnit`
+serialization and removal of a temporary carrier are separate lifecycle work;
+this handoff patch does not change game-cache format.
+
+## Item ownership and per-item death-drop policy
+
+`GetItemPlayer` returns the player associated with the item entity, regardless
+of which unit currently carries it. `SetItemPlayer` changes that item player
+without moving the item or changing its inventory carrier. The `changeColor`
+flag is accepted, but a separate mutable item visual colour is not yet supported.
+
+`SetItemDropOnDeath` records an explicit per-item override. On its carrier's
+death, an overridden item follows this flag; otherwise the inventory ability's
+`inv2` (DataB) default continues to govern drops. Items not dropped remain
+attached for normal hero-death/revival behaviour. This is separate from
+`SetItemDroppable`, which controls ordinary player-initiated drops.
+
+### Permanent-stat tome powerups
+
+The ability registry permits automatic consumption of `AIsm`, `AIam`, `AIim`,
+`AIxm`, `AImi`, `AIem` and `AIlm` **only** for ItemData rows explicitly marked
+`powerup` and `usable`. These share the ordinary carried-item ability procedure,
+but pickup dispatch uses the actual collector rather than a client selection.
+Values come from the concrete ability rawcode's Data fields, including custom
+map overrides. Pickup and use events precede deferred removal, as for other
+ability-bearing runes. Non-powerup items carrying these abilities retain their
+normal inventory/use behavior; unsupported nonempty powerup abilities are not
+silently consumed.
+
+Hero-only attribute and XP/level effects require a hero recipient. Further
+retail comparison is needed for consumption on failed hero-only effects.
+
+### Rune of Dispel Magic (`AIdi`)
+
+The `AIdi` power-up invokes shared `S_DispelMagicArea` at the collecting
+unit's position. `AbilityData` owns Area and DataB (summoned damage). The
+procedure dispels removable statuses, preserves timed-life and other
+non-dispellable statuses, and damages hostile, dispellable summoned units.
+It consumes the rune even when no magical effects are nearby and uses the
+authored TargetArt through the existing effect pipeline. Retail visual/audio
+timing still needs in-game comparison.
+
+### Speed and Shielding buff presentation
+
+Rune of Speed (`APsa`) and other timed item-speed variants now opt their
+authored buff status into the shared persistent `TargetArt` lifecycle. Rune of
+Shielding (`ANse`) similarly opts its one-charge `BNss` status into that
+lifecycle without adding an expiry timer. The buff rawcode resolves the model,
+not the ability's one-shot `TargetArt`. Refresh/reapplication is deduplicated;
+expiry, dispel, or consumption of the shield charge retires the owned effect.
+The existing ability `TargetArt` remains a separate one-shot activation effect.
+Speed and Shielding now emit that one-shot ability `TargetArt` when a
+recipient actually gains the respective status, independently from persistent
+buff visuals. A no-target pickup and a duplicate Shielding charge do not
+fabricate a per-recipient activation effect. This is data-driven: missing
+`TargetArt` is a no-op in the shared effects subsystem.
+This does not by itself establish retail parity for authored sounds or model
+animation sequences.
+
+### Rune of Spirit Link (`rspl` / `Aspp`)
+
+`Aspp` executes automatically on pickup and shares the normal `Aspl`/`Bspl`
+damage-redistribution implementation. The collector is the center and priority
+target; the rune's authored `DataB`, `Area`, `Dur`/`HeroDur`, `BuffID` and
+target flags govern selection and status lifetime. The rune is consumed even
+with no eligible recipients.
+
+### Glyph of Omniscience (`gomn` / `AIrv`)
+
+The `AIrv` power-up reveals the full map temporarily to the collecting player,
+without disabling fog for all players. The visibility overlay is reapplied
+following ordinary unit sight until its ability `Dur` expires (stock five
+seconds); explored terrain remains explored afterwards. Repeated glyphs extend
+the ongoing reveal rather than shortening it. Generic world-item pickup events,
+consumption, and the authored target effect are reused. The per-player simulation
+deadline is saved with fog state, so visibility resumes for its remaining time
+after load; explored terrain remains in the existing exploration payload.
+
+### Fortification and Ultravision glyphs
+
+`AIgf` and `AIgu` (with legacy `AIgl` as a compatibility alias) use the
+existing automatic power-up pickup path. `Iglu` identifies an upgrade and
+`Igl1` specifies how many research levels to grant; the handler does not
+hard-code `Rgfo`/`Rguv`. The normal player tech-change pathway updates units
+that use the upgrade, including existing and newly spawned units. Upgrade
+maximums are respected, and an already-maxed glyph is still collected. An
+unknown upgrade or missing ability data does not silently grant another tech.
+The authored TargetArt is emitted on successful use. Retail audiovisual parity
+and whether custom maps use other `Iglu` export encodings remain unverified.
+
+## JASS item enumeration
+
+`EnumItemsInRect` enumerates in-world items within the given rectangle. Its optional
+boolexpr filter is evaluated per candidate with `GetFilterItem`; accepted items
+are delivered to the action with `GetEnumItem`. Nested calls restore their
+caller's item context. Inventory-held items are excluded from world enumeration.
+
+## JASS item pools
+
+`CreateItemPool`, `DestroyItemPool`, `ItemPoolAddItemType`,
+`ItemPoolRemoveItemType`, and `PlaceRandomItem` support script-defined weighted
+item creation. Pools are JASS-owned handles with up to 256 distinct item types;
+adding an existing rawcode replaces its weight. Only finite positive weights
+are accepted. Empty, destroyed, and all-unresolved pools produce a null item.
+Unresolvable item types are excluded from selection, and successful selections
+spawn through the ordinary world-item path. Destroyed handles remain inert even
+if another JASS variable retains a reference. These pools do not enforce item
+uniqueness or global population limits; map triggers must implement such policy.
+Pools, their aliases, and destroyed state survive VM snapshots through the owned
+handle codec; see [save/load](save-load.md#item-pools-and-version-100).
+
+The 256-entry maximum is an OpenRealm implementation limit, not a verified
+Warcraft III retail limit. Weighted selection and invalid-weight handling still
+require retail comparison where exact edge-case compatibility matters.
+
+## Custom-map item uniqueness and concurrent caps
+
+There is no universal item-type copy cap in the base item spawning path.
+Custom maps can use `UnitItemInSlot` to count copies held by each relevant
+hero, and `EnumItemsInRect` plus `GetEnumItem`/`GetItemTypeId` to count loose
+world copies. Inventory-held items must not also be counted as ground items.
+An item transfer preserves its handle and should not increase the total;
+`RemoveItem` decreases the count of currently existing copies. A map wishing
+to limit **lifetime spawns** instead must separately track total creations:
+removing an item does not refund that lifetime quota. The map decides whether
+an ineligible drop is suppressed or rerolled; neither is a default policy.
+
+Regression coverage: `wc3_api.item_unique_drop_counts_carried_and_world_instances`
+and `wc3_api.item_duplicate_pickup_counts_new_item_and_existing_copy`.
+The second test verifies the post-acquisition inventory view seen by item
+pickup triggers. Additional campaign/save-load compatibility is covered by
+existing item inventory tests; no global engine-owned counter is introduced.
+
+Pickup callbacks are queued and observe the inventory at dispatch time. Two
+`UnitAddItem` calls in one script action can therefore both observe both copies.
+`wc3_api.item_duplicate_pickup_counts_new_item_and_existing_copy` drains the first
+pickup's event before issuing the second to reproduce successive gameplay pickups.
+Its final JASS verification must be run, not merely queued.
+
+### Rune of Rebirth (`rreb` / `AIrb`)
+
+`AIrb` is a validated automatic power-up. `SetItemDropID` on the dropped item
+identifies the original monster unit **type**, not a live entity handle. On
+pickup, the game spawns that type for the collecting player's ownership at
+the rune's position, using ordinary unit food accounting and authored
+ability TargetArt. If the item has no valid unit drop ID or spawning fails,
+the rune is not consumed. The effect never converts the nearest unrelated
+creep. Generic pickup sound and item events follow the normal power-up path.
+
+The retail description identifies the original monster as the recipient;
+this implementation restores its type, not its prior instance-specific health,
+experience, buffs or inventory. Detailed retail fidelity for these fields
+requires additional map-level verification.
+
+## Campaign powerups: gold, lumber, and secret-level pickups
+
+`AIgo` and `AIlu` change the collecting player's resources by authored
+`DataA`, bypassing upkeep taxation. Both accept negative values for custom
+items and clamp the resulting balance to the supported resource range; positive
+changes use the existing resource-gain notification. A zero change still
+consumes a supported powerup. Resource grants do not invent a grant when an
+ability list is missing.
+
+`sclp` (Secret Level Powerup) uses the same ability-less powerup
+pickup path as Shimmerweed: it can be collected with a full inventory,
+publishes pickup events with the original item handle retained until queued
+callbacks complete, and then disappears. An ability-less quest pickup does
+**not** fabricate item-use events or unlock a specific campaign chapter.
+Map scripts/campaign progression own the secret-level unlock; no global
+`sclp` special case is required in the item system.
+
+## Validated component lookup
+
+`G_ItemState(ent)` returns validated Item state without allocating and rejects
+non-item target types before traversing components. Use its returned pointer when
+classification and payload access are both needed; `G_IsItem` is its boolean wrapper.
+Raw `G_GetItem` is appropriate inside initialization/teardown and partial-state
+transitions. See [component lookup](pooled-entity-state.md#optional-components).

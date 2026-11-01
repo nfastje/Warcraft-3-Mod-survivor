@@ -1,0 +1,127 @@
+# Server-Selected Presentation Effects
+
+## Pattern
+
+When a game needs to attach a race/unit/spell-specific model or effect to an entity
+(building-on-fire, frost, poison, an aura ring), the shared network layer must stay
+completely ignorant of *which* content is selected. It only carries:
+
+- `BYTE entityState_t.effect` — a registered model index, same shape as `model`/`model2`.
+- `USHORT entityState_t.effect_flags` — an explicit discriminant (`EFX_MODEL`, `EFX_SPLAT`,
+  `EFX_ATTACH_SLOTS`, ...), a packed slot/parameter mask (`EFX_SLOT_MASK`/`EFX_SLOT_SHIFT`),
+  and the opaque `EFX_GAME_VARIANT_*` bits when a selected game needs a tiny renderer-facing classification.
+
+All content resolution — race lookup, asset path construction, threshold/tier logic —
+happens server-side in `games/<game>/game/skills/`, which registers the resolved model
+and writes the generic index + flags. The client-side `games/<game>/renderer/` hook
+consumes `effect`/`effect_flags` generically; it must not contain a table of per-race
+or per-spell asset paths.
+
+## Named model attachments
+
+For an entity that follows a named socket on another rendered entity, set
+`EF_NAMED_ATTACHMENT`. The snapshot reuses existing fields: `name` carries the packed
+`CS_GENERAL` socket name and `hover_value` carries the parent entity number plus one.
+The game snapshot customization preserves those values for flagged entities; the
+generic client resolves the socket string and copies the parent/name into its local
+render entity, and the selected game renderer resolves the animated socket transform.
+This keeps `entityState_t` size and the 32-bit delta mask unchanged. Do not add wire
+fields for parent or socket identity.
+
+## Anti-pattern (do not repeat)
+
+An earlier version of building-damage fire rendering (see PR #241, commit `5be1bfc`)
+added `EF_BUILDING_FIRE_UNDEAD` / `EF_BUILDING_FIRE_NIGHTELF` directly to the shared
+`common/shared.h` flags enum, and a matching per-race asset table to
+`games/warcraft-3/renderer/r_game.c`. This baked WC3-specific race identity into the
+generic engine layer and the client renderer, in violation of the engine/game boundary.
+It was corrected in commit `8d89a18` by replacing the named per-race flags with the
+generic `effect`/`effect_flags` mechanism above and moving all race/tier resolution into
+the new `games/warcraft-3/game/skills/s_onfire.c`.
+
+## Reference implementation
+
+- `games/warcraft-3/game/skills/s_onfire.c` — race lookup, damage-tier staging, model
+  registration.
+- `common/shared.h` — `EFX_*` enum, `entityState_t.effect`/`effect_flags`.
+- `games/warcraft-3/renderer/r_game.c` `R_RenderModel()` — generic consumer, no
+  per-race branching.
+
+See also: [Building Damage Rendering](../games/warcraft-3/building-damage-rendering.md) and [WC3 Ability, Buff, And Item Presentation Effects](../games/warcraft-3/ability-and-item-effects.md).
+
+## Anti-pattern #4: `#ifdef` around environment lighting in `client/` (do not repeat)
+
+PR #296 published generic `CS_TERRAIN_LIGHT_MODEL` / `CS_ENTITY_LIGHT_MODEL` slots, then resolved
+`WC3_UI_PLAYERSTAT_TIME_PHASE` in `client/cl_view.c` behind `#if !defined(WOW) && !defined(SC2)`
+and included `games/warcraft-3/common/ui_constants.h`. Day phase is an ordinary player stat, and
+the evaluated scene light is an ordinary view sample. The client copies optional model-index
+configstrings plus `UI_PLAYERSTAT_ENV_PHASE`; `R_SetupEnvironmentLighting` in `games/*/renderer`
+evaluates those inputs into `viewDef.terrainLight` / `entityLight`. See
+[Environment Lighting](environment-lighting.md).
+
+## Anti-pattern #3: `#ifdef WC3` around generic camera samples (do not repeat)
+
+PR #287 added `playerState.camera_render` and `#ifdef WC3` copies in `CL_ParsePlayerInfo`. Target height offset, near clip, and far clip are ordinary camera sample fields, not Warcraft-only data. Hiding them behind a compile guard also consumed the final 32-bit player-state field. They now live in generic `vieworigin` (world-space look-at) plus `znear`/`zfar` packed with `distance`. `viewangles` travel on the same snapshot (Euler degrees, `ROTATE_ZYX`); the client converts them to a quaternion and slerps. Do not add a parallel `viewquat` field — Euler→quat is lossless. Camera target bounds do not travel — the client clamps with `CM_GetWorldBounds()`. Unused WoW map metadata moved to one WoW map-info configstring. The player-state delta mask remains 32 bits. The server composes Z and must always write `znear`/`zfar` the same way it writes `fov`; the client copies the sample with no keep-previous fallback.
+
+## Anti-pattern #2: `#ifdef` branch in a shared dispatcher (do not repeat)
+
+PR #242 initially added `#ifdef WC3 ... strcmp(command, "wc3_selection") ... #endif` directly inside the
+shared `CL_ParseGameCommand()` in `client/cl_parse.c`. That was wrong because selection synchronization is
+a generic client-state operation, not WC3 UI behavior. The corrected implementation uses the generic
+`select` command and parses it in `CL_ParseGameCommand()` without a game guard; only the server-side
+shortcut producer remains under `games/warcraft-3/`.
+
+## Review rule
+
+When a shared dispatcher needs a new game behavior, first locate its function-table callback. If the callback
+exists, implement the command in the selected game's module. If it does not exist, add a narrow table entry;
+do not substitute a per-game preprocessor guard or a hardcoded command branch in the shared dispatcher.
+
+## Game-owned presentation datagrams
+
+Presentation state that is neither an entity snapshot nor generic client state may use a game-owned per-frame datagram. Warcraft III weather is carried in that datagram, cached by the client, and exposed through `viewDef`; `games/warcraft-3/renderer/r_weather.c` consumes the view state. See [WC3 Weather](../games/warcraft-3/weather.md).
+
+Warcraft III lightning uses the same boundary for two-endpoint transient presentation. The game resolves the ability/JASS lightning rawcode, endpoint positions, colour and lifetime into `LIGHTNINGEFFECT`; the client only caches that generic record. `games/warcraft-3/renderer/r_lightning.c` then resolves `Splats\LightningData.slk`, while the shared renderer supplies a generic textured camera-facing polyline primitive. Do not put ability rawcodes, `LightningData.slk` aliases, or WC3 spell selection in `renderer/`. The lightning registry is authoritative/save-safe so dropped snapshots converge to the current active set instead of depending on a one-shot temporary event.
+
+The shared ribbon primitive accepts a polyline and continuous texture coordinates; the WC3 renderer owns the `LightningData.slk`-specific point generation and lifetime interpretation. This keeps procedural lightning reusable without moving WC3 rawcode or SLK knowledge into the engine layer.
+
+The WC3 renderer resets its unresolved-row warning cache when the map asset scope changes. Each missing effect ID is reported once per map and remains visible to diagnostics without adding a draw-time fallback path.
+
+## Opaque game-owned presentation variants
+
+When a game needs a very small renderer-facing classification that is not a
+registered model/effect index, use the generic variant carriers rather than
+adding game names to shared structs. `entityState_t.effect_flags` bits 13-15
+are `EFX_GAME_VARIANT_*`: shared networking and `client/` transport the `0..7`
+value without interpreting it. `playerState_t.stats[UI_PLAYERSTAT_GAME_VARIANT]`
+likewise carries one game-owned local presentation mode into
+`viewDef.game_variant`. The selected `games/<game>/game/` producer and
+`games/<game>/renderer/` consumer own the meaning.
+
+Warcraft III automatic minimap contacts are the first user of this contract:
+WC3 defines its contact enum and ally-colour semantics only in
+`games/warcraft-3/common/minimap.h`. The generic client copies entity owner,
+team, `effect_flags`, and the local game variant but contains no WC3 marker or
+filter branches. Game renderers that use the opaque value remain responsible
+for identifying which top-level render entities participate; the generic client does
+not rewrite game-owned variant bits on derived/secondary draw entities.
+
+The three entity bits were previously unused. Assigning them changes protocol
+semantics but does not widen `entityState_t`, consume another entity-delta bit,
+or change the struct size. Every value is covered by a generic delta round-trip
+in `tests/test_net.c`; semantic behavior belongs in game-specific tests. See
+[WC3 minimap markers](../games/warcraft-3/minimap-markers.md).
+
+## Selection-scoped world indicators
+
+Persistent local markers such as Warcraft III's Rally destination are ordinary game-owned edicts. The game resolves and registers the model, sets `SVF_OWNER_ONLY`, and stores the recipient in `entityState_t.player`; `SV_BuildClientFrame` excludes the edict from every other client's snapshot. Point markers use an authoritative world origin, while widget markers use the normal linked-edict movement path to follow their target.
+
+The owning game client keeps the marker edict pointer so selection changes update or free the same entity. Save/load does not serialize that runtime cache pointer: the marker's saved `owner` edict reconstructs it after pointer fixups. One-shot acknowledgements remain temporary events: point orders use the move/attack confirmation events, while WC3 Smart unit-target acknowledgement and JASS `AddIndicator` share the generic `TE_ENTITY_INDICATOR` widget event. See [WC3 Command feedback](../games/warcraft-3/command-feedback.md).
+
+## One-shot resolved world text
+
+Short-lived world text follows the same ownership rule as model effects. `TE_FLOATING_TEXT` is a generic temporary event: it carries an already-resolved string, RGBA colour, font index, lifetime/fade timings, screen-space velocity, and world anchor. The owning game must resolve semantic identity such as Warcraft gold/lumber before writing the event. Shared/client code must not grow `TE_GOLD_TEXT`, race/resource tables, or game-data lookups.
+
+The client captures the event anchor and projects it through the active camera each draw. It does not create a persistent network entity and does not attach the text to the source after spawn. This is appropriate for one-shot feedback such as a committed resource gain; persistent/script-addressable text belongs to a separate handle/entity contract. See [WC3 Resource-Gain Floating Text](../games/warcraft-3/resource-gain-text.md).
+
+For script-addressable text with setters and a destroy lifecycle, the owning game may publish keyed generic text-tag state updates and removals. The client treats the key as opaque, updates the matching presentation object, follows an optional entity anchor, and does not interpret Warcraft gameplay meaning. Warcraft III JASS texttags use this path; resource gains and bounty labels continue to use the one-shot event.

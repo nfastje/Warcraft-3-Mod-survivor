@@ -1,0 +1,384 @@
+#include "s_skills.h"
+
+#define ID_MIND_ROT MAKEFOURCC('A','N','m','r')
+#define ID_LIQUID_FIRE MAKEFOURCC('A','l','i','q')
+#define ID_CORROSIVE_BREATH MAKEFOURCC('A','c','o','r')
+#define BUFF_LIQUID_FIRE MAKEFOURCC('B','l','i','q')
+#define BUFF_CORROSIVE_BREATH MAKEFOURCC('B','c','o','r')
+#define ID_DEATH_DAMAGE_AOE MAKEFOURCC('A','d','d','a')
+#define ID_FEEDBACK MAKEFOURCC('A','f','b','k')
+#define ID_FEEDBACK_TOWER MAKEFOURCC('A','f','b','t')
+#define ID_HARDENED_SKIN MAKEFOURCC('A','s','s','k')
+#define ID_HARDENED_SKIN_NAGA MAKEFOURCC('A','n','s','k')
+#define ID_MANA_REGEN_AURA MAKEFOURCC('A','a','r','m')
+#define ID_ORB_ANNIHILATION MAKEFOURCC('A','N','a','k')
+
+
+static bool unit_has_proc_ability(edict_t const *ent, abilityProc_t proc) {
+    char name[5] = {0};
+    if (!ent) return false;
+    if (ent->data.UnitAbilities && ent->data.UnitAbilities->abilList) {
+        PARSE_LIST(ent->data.UnitAbilities->abilList, token, parse_segment) {
+            abilityitem_t item;
+            if (strlen(token) != 4 || !G_ActorHasSkill((edict_t *)ent, token)) continue;
+            item = S_AbilityItem(FS_SLKKey(token));
+            if (item.ability && item.ability->proc == proc) return true;
+        }
+    }
+    FOR_LOOP(i, (ent->unit_state ? ARRAY_COUNT(ent->unit_state->overrides.added) : 0)) {
+        uint32_t alias = ent->unit_state->overrides.added[i];
+        abilityitem_t item;
+        if (!alias) continue;
+        memcpy(name, &alias, 4); item = S_AbilityItem(alias);
+        if (G_ActorHasSkill((edict_t *)ent, name) && item.ability && item.ability->proc == proc) return true;
+    }
+    FOR_LOOP(i, ent->unit_state ? MAX_HERO_ABILITIES : 0) {
+        abilityitem_t item;
+        if (!ent->unit_state->ranks[i].code) continue;
+        item = S_AbilityItem(ent->unit_state->ranks[i].code);
+        if (item.ability && item.ability->proc == proc) return true;
+    }
+    return false;
+}
+
+void S_CreepAttackOnHit(edict_t *attacker, edict_t *target) {
+    uint32_t level, code;
+    if (!attacker || !target || !S_SpellIsEnemy(attacker, target) || M_IsDead(target)) return;
+    code = G_UnitAbilityLevel(attacker, ID_MIND_ROT) ? ID_MIND_ROT : 0;
+    if (code) {
+        level = MAX(1u, G_UnitAbilityLevel(attacker, code));
+        target->mana.value = MAX(0.0f, target->mana.value - S_SpellData(code, level, 1));
+    }
+    code = G_UnitAbilityLevel(attacker, ID_LIQUID_FIRE) ? ID_LIQUID_FIRE : 0;
+    if (code) {
+        level = MAX(1u, G_UnitAbilityLevel(attacker, code));
+        S_SpellApplyTimedStatus(target, "Bliq", level, S_SpellHeroDuration(code, level, target));
+    }
+    code = G_UnitAbilityLevel(attacker, ID_CORROSIVE_BREATH) ? ID_CORROSIVE_BREATH : 0;
+    if (code) {
+        level = MAX(1u, G_UnitAbilityLevel(attacker, code));
+        S_SpellApplyTimedStatus(target, "Bcor", level, S_SpellHeroDuration(code, level, target));
+    }
+}
+
+float S_CreepAttackSpeedReduction(edict_t const *unit) {
+    uint32_t level = unit ? G_UnitStatusLevel(unit, BUFF_LIQUID_FIRE) : 0;
+    return level ? S_SpellData(ID_LIQUID_FIRE, level, 3) : 0.0f;
+}
+
+/* Death Damage AOE is physical damage: authored target classes/alliance apply,
+ * while spell immunity/invisibility do not suppress an explosion. */
+static bool death_damage_aoe_allows(uint32_t code, uint32_t ability_level, edict_t *source, edict_t *target) {
+    abilityLevel_t const *row;
+    cstring_t targets;
+    bool structure;
+
+    if (!source || !S_SpellIsAliveTarget(target) || target == source || S_UnitIsCycloned(target)) return false;
+    row = G_AbilityLevel(code, ability_level);
+    targets = row ? row->targs : NULL;
+    if (!targets || !*targets) return S_SpellIsEnemy(source, target);
+
+    structure = target->targtype == TARG_STRUCTURE || G_UnitIsBuilding(target->class_id);
+    if ((strstr(targets, "air") || strstr(targets, "ground") || strstr(targets, "structure")) &&
+        !(strstr(targets, "air") && target->targtype == TARG_AIR) &&
+        !(strstr(targets, "ground") && target->targtype == TARG_GROUND) &&
+        !(strstr(targets, "structure") && structure)) return false;
+    if (strstr(targets, "organic") && target->targtype == TARG_MECHANICAL) return false;
+    if (strstr(targets, "mechanical") && target->targtype != TARG_MECHANICAL) return false;
+
+    if (strstr(targets, "player") && target->s.player == source->s.player) return true;
+    if (strstr(targets, "friend") && S_SpellIsFriend(source, target)) return true;
+    if (strstr(targets, "enemy") && S_SpellIsEnemy(source, target)) return true;
+    if (strstr(targets, "neutral") && target->s.player < MAX_PLAYERS && level.mapinfo &&
+        level.mapinfo->players[target->s.player].playerType == kPlayerTypeNeutral) return true;
+    return !strstr(targets, "player") && !strstr(targets, "friend") &&
+        !strstr(targets, "enemy") && !strstr(targets, "neutral");
+}
+
+/* AIdm was the old tree/wall helper; retail Amnx/Adda now uses its own
+ * Targets Allowed list for destructibles. Destructibles have no player
+ * alliance, so only their authored target class participates here. */
+static bool death_damage_aoe_allows_destructable(uint32_t code, uint32_t ability_level, edict_t const *target) {
+    abilityLevel_t const *row;
+    cstring_t targets;
+
+    if (!target || !G_IsDestructable(target) || G_GetDestructable(target)->dead || G_UnitHasFlag(target, UNIT_FLAG_INVULNERABLE)) return false;
+    row = G_AbilityLevel(code, ability_level);
+    targets = row ? row->targs : NULL;
+    if (!targets || !*targets) return false;
+    switch (target->targtype) {
+    case TARG_TREE:       return strstr(targets, "tree") != NULL;
+    case TARG_WALL:       return strstr(targets, "wall") != NULL;
+    case TARG_DEBRIS:     return strstr(targets, "debris") != NULL;
+    case TARG_BRIDGE:     return strstr(targets, "bridge") != NULL;
+    case TARG_DECORATION: return strstr(targets, "decoration") != NULL;
+    default:              return false;
+    }
+}
+
+static void death_damage_aoe_apply(edict_t *source, uint32_t code, uint32_t level, vec2_t const *origin) {
+    float full_r = S_SpellData(code, level, 1), full_d = S_SpellData(code, level, 2);
+    float part_r = S_SpellData(code, level, 3), part_d = S_SpellData(code, level, 4);
+    if (!source || !origin || (full_d <= 0.0f && part_d <= 0.0f)) return;
+    if (part_r < full_r) part_r = full_r;
+    FILTER_EDICTS(target, death_damage_aoe_allows(code, level, source, target)) {
+        float dist = Vector2_distance(&target->s.origin2, origin);
+        float damage;
+        if (dist > part_r) continue;
+        damage = dist <= full_r ? full_d : part_d;
+        if (damage > 0.0f) T_Damage(target, source, (int)damage);
+    }
+    FILTER_EDICTS(target, death_damage_aoe_allows_destructable(code, level, target)) {
+        float dist = Vector2_distance(&target->s.origin2, origin);
+        float damage;
+        if (dist > part_r) continue;
+        damage = dist <= full_r ? full_d : part_d;
+        if (damage > 0.0f) G_DestructableApplyDamage(target, source, damage);
+    }
+}
+
+/* Delayed Amnx/Adda damage snapshots only the death position. Victims are
+ * enumerated when Duration expires, preserving retail's fast-unit escape. */
+void death_damage_aoe_think(edict_t *thinker) {
+    edict_t *source;
+    uint32_t code, level;
+
+    if (!thinker || !thinker->inuse) return;
+    if (G_Time() < thinker->freetime) return;
+    source = S_SpellChannelOwner(thinker);
+    if (!source) source = thinker;
+    code = thinker->class_id;
+    level = MAX(1u, (uint32_t)thinker->wait);
+    death_damage_aoe_apply(source, code, level, &thinker->s.origin2);
+    G_FreeEdict(thinker);
+}
+
+static void death_damage_aoe(edict_t *ent, uint32_t code) {
+    uint32_t level;
+    float delay;
+    edict_t *thinker;
+
+    if (!ent || !code) return;
+    level = MAX(1u, G_UnitAbilityLevel(ent, code));
+    delay = S_SpellDuration(code, level, false);
+    if (delay <= 0.0f) {
+        death_damage_aoe_apply(ent, code, level, &ent->s.origin2);
+        return;
+    }
+
+    thinker = G_Spawn();
+    if (!thinker) {
+        /* HACK: edict exhaustion leaves no timer entity; resolve damage now rather than lose the death effect. */
+        fprintf(stderr, "WC3 death AOE: no thinker for ability %c%c%c%c on unit %u; resolving immediately\n",
+                (char)(code & 255), (char)((code >> 8) & 255), (char)((code >> 16) & 255), (char)(code >> 24), ent->s.number);
+        death_damage_aoe_apply(ent, code, level, &ent->s.origin2);
+        return;
+    }
+    thinker->owner = ent;
+    G_AddChannel(thinker);
+    G_GetChannel(thinker)->owner_spawn_time = ent->spawn_time;
+    thinker->class_id = code;
+    thinker->wait = (float)level;
+    thinker->s.origin2 = ent->s.origin2;
+    thinker->s.player = ent->s.player;
+    thinker->freetime = G_Time() + (uint32_t)(delay * 1000.0f);
+    thinker->think = death_damage_aoe_think;
+}
+
+BZ_ABILITY_PROC(CAbilityDeathDamageAoe) {
+    if (msg == A_DEATH) { death_damage_aoe(ent, call && call->item ? call->item->code : ID_DEATH_DAMAGE_AOE); return true; }
+    return CAbilityPassive(ent, msg, call);
+}
+BZ_ABILITY_PROC(CAbilityMindRot) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityLiquidFire) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityCorrosiveBreath) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityLightningAttack) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityBash) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityFeedback) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityCleavingAttack) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityPulverize) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilitySpiked) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityHardenedSkin) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityAuraRegenMana) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityResistantSkin) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityCreepAura) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityReincarnation) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityOrbAnnihilation) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityTrueSight) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityAbsorb) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityChaos) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilitySpiderAttack) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityMagicImmunity) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityEngineeringUpgrade) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityDemolish) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityFactory) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityTornadoDamage) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityRevenge) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityGhost) {
+    switch (msg) {
+    case A_UNIT_INIT:
+    case A_ENABLE:
+    case A_LEVEL_CHANGED:
+        if (ent) ent->runtime.flags |= UNIT_BALANCE_GHOST_INVISIBLE;
+        return true;
+    case A_DISABLE:
+    case A_UNIT_REMOVE:
+        if (ent) ent->runtime.flags &= ~UNIT_BALANCE_GHOST_INVISIBLE;
+        return true;
+    default:
+        return CAbilityPassive(ent, msg, call);
+    }
+}
+
+/* Ghost (Visible) keeps its distinct Warcraft ability class.  Its exact
+ * asymmetric collision/building-blocking policy remains intentionally
+ * separate until that retail behavior is pinned down. */
+BZ_ABILITY_PROC(CAbilityGhostVisible) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityEthereal) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityScout) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityBallsOfFire) { return CAbilityPassive(ent, msg, call); }
+/* Pillage (Asal): the passive handler itself never polls; actual primary-hit
+ * damage calls here from T_DamageInternal after mitigation and Spirit Link.
+ * DataA=Sal1 salvage ratio; DataB=Sal2 accumulated HP per award step.
+ * A separate ledger on each building keeps attackers/players independent and
+ * survives save/load through the component pool. */
+#define ID_PILLAGE MAKEFOURCC('A','s','a','l')
+
+static bool pillage_allows_target(edict_t *attacker, edict_t *target, uint32_t alias, uint32_t rank) {
+    abilityLevel_t const *row = G_AbilityLevel(alias, rank);
+    cstring_t mask = row ? row->targs : NULL;
+    bool enemy = S_SpellIsEnemy(attacker, target);
+    bool friend = S_SpellIsFriend(attacker, target);
+    bool neutral = target->s.player < MAX_PLAYERS && level.mapinfo &&
+        level.mapinfo->players[target->s.player].playerType == kPlayerTypeNeutral;
+
+    if (!mask || !*mask) return enemy;
+    if (S_SpellTargetHasToken(mask, "enemy", NULL) && enemy) return true;
+    if (S_SpellTargetHasToken(mask, "friend", NULL) && friend) return true;
+    if (S_SpellTargetHasToken(mask, "neutral", NULL) && neutral) return true;
+    if (S_SpellTargetHasToken(mask, "player", NULL) && attacker->s.player == target->s.player) return true;
+    return !S_SpellTargetHasToken(mask, "enemy", NULL) &&
+           !S_SpellTargetHasToken(mask, "friend", NULL) &&
+           !S_SpellTargetHasToken(mask, "neutral", NULL) &&
+           !S_SpellTargetHasToken(mask, "player", NULL) && enemy;
+}
+
+/* Convert double-precision fractional entitlements into integral transactions.
+ * Payout is bounded so malicious custom data cannot overflow the player state. */
+static void pillage_credit(edict_t *target, player_t *player, uint32_t resource, double *remainder,
+                           double gained) {
+    int32_t whole;
+    if (!isfinite(gained) || gained <= 0.0) return;
+    *remainder += gained;
+    if (!isfinite(*remainder)) { *remainder = 0.0; return; }
+    if (*remainder < 1.0) return;
+    /* G_CreditResourceIncome adds a signed player stat. Do not overflow the
+     * resource counter when a map authors extreme building costs/ratios. */
+    whole = (int32_t)MIN(floor(*remainder + 1e-9),
+                         (double)MAX(0, INT32_MAX - MAX(0, player->stats[resource])));
+    if (whole <= 0) return;
+    *remainder -= whole;
+    G_CreditResourceIncome(player, target, resource, whole);
+}
+
+void S_PillageOnAttackDamage(edict_t *attacker, edict_t *target, float health_removed) {
+    abilityAliasRef_t ability;
+    gameClient_t *client;
+    pillage_t *ledger;
+    UnitBalance_t const *building;
+    double step, ratio, completed, hp;
+    uint32_t owner;
+
+    if (!attacker || !target || health_removed <= 0.0f || !target->inuse ||
+        !G_UnitIsStructure(target) || G_GetConstruction(target) || !target->data.UnitBalance ||
+        target->health.max_value <= 0.0f || M_IsDead(target) ||
+        G_UnitHasFlag(target, UNIT_FLAG_INVULNERABLE)) return;
+    owner = attacker->s.player;
+    if (owner >= MAX_PLAYERS || !(client = G_GetPlayerClientByNumber(owner)) ||
+        client->ps.number != owner) return;
+    ability = S_ResolveAbilityAlias(attacker, ID_PILLAGE);
+    if (!ability.alias || !ability.level || !G_IsUnitAbilityAvailable(attacker, ability.alias) ||
+        !G_UnitAbilityResearchAvailable(attacker, ability.alias) ||
+        !pillage_allows_target(attacker, target, ability.alias, ability.level)) return;
+    building = target->data.UnitBalance;
+    if (building->goldCost <= 0 && building->lumberCost <= 0) return;
+    ratio = (double)S_SpellData(ability.alias, ability.level, 1);
+    step = (double)S_SpellData(ability.alias, ability.level, 2);
+    if (!isfinite(ratio) || ratio <= 0.0 || !isfinite(step) || step <= 0.0) return;
+    if (!(ledger = G_AddPillage(target))) return;
+
+    /* DataB is a damage threshold, not a per-hit multiplier. Retain sub-step
+     * HP independently for each recipient, even when another unit repairs or
+     * a non-Pillage source damages the same building. */
+    hp = ledger->damage_remainder[owner] + health_removed;
+    completed = floor(hp / step + 1e-9);
+    if (completed < 1.0) { ledger->damage_remainder[owner] = hp; return; }
+    ledger->damage_remainder[owner] = hp - completed * step;
+    hp = completed * step / (double)target->health.max_value;
+    if (building->goldCost > 0)
+        pillage_credit(target, &client->ps, PLAYERSTATE_RESOURCE_GOLD,
+                       &ledger->gold_remainder[owner], building->goldCost * ratio * hp);
+    if (building->lumberCost > 0)
+        pillage_credit(target, &client->ps, PLAYERSTATE_RESOURCE_LUMBER,
+                       &ledger->lumber_remainder[owner], building->lumberCost * ratio * hp);
+}
+
+BZ_ABILITY_PROC(CAbilitySalvage) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityTreeOfLife) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityGrabTree) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityDetector) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityMagicSentry) {
+    switch (msg) {
+    case A_UNIT_INIT:
+    case A_ENABLE:
+        S_UpdateMagicSentryPresentation(ent);
+        return true;
+    case A_DISABLE:
+    case A_DEATH:
+    case A_UNIT_REMOVE:
+        S_RemoveMagicSentryPresentation(ent);
+        return true;
+    default:
+        return CAbilityPassive(ent, msg, call);
+    }
+}
+BZ_ABILITY_PROC(CAbilityNeutralSpell) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityDrunkenBrawler) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilitySellItem) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilitySellUnit) { return CAbilityPassive(ent, msg, call); }
+
+bool S_UnitIsResistant(edict_t const *unit) { return G_UnitIsHero(unit) || unit_has_proc_ability(unit, CAbilityResistantSkin); }
+
+int S_OrbAnnihilationDamage(edict_t *attacker, int damage) {
+    uint32_t level = attacker ? G_UnitAbilityLevel(attacker, ID_ORB_ANNIHILATION) : 0;
+    return level ? damage + (int)S_SpellData(ID_ORB_ANNIHILATION, level, 1) : damage;
+}
+BZ_ABILITY_PROC(CAbilitySlowAura) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityCommandAura) { return CAbilityPassive(ent, msg, call); }
+BZ_ABILITY_PROC(CAbilityWarDrums) { return CAbilityPassive(ent, msg, call); }
+
+int S_FeedbackDamage(edict_t *attacker, edict_t *target, int damage) {
+    static uint32_t const codes[] = { ID_FEEDBACK, ID_FEEDBACK_TOWER };
+    uint32_t code = 0, level, slot;
+    size_t i;
+    if (!attacker || !target) return damage;
+    for (i = 0; i < sizeof(codes) / sizeof(*codes); i++)
+        if ((level = G_UnitAbilityLevel(attacker, codes[i]))) { code = codes[i]; break; }
+    if (!code || target->mana.value <= 0.0f) return damage;
+    slot = G_UnitIsHero(target) ? 3 : 1;
+    { float drained = MIN(target->mana.value, S_SpellData(code, level, slot));
+      target->mana.value -= drained;
+      return damage + (int)(drained * S_SpellData(code, level, slot + 1));
+    }
+}
+
+int S_HardenedSkinDamage(edict_t *target, int damage) {
+    static uint32_t const codes[] = { ID_HARDENED_SKIN, ID_HARDENED_SKIN_NAGA };
+    uint32_t code = 0, level;
+    size_t i;
+    if (!target || damage <= 0) return damage;
+    for (i = 0; i < sizeof(codes) / sizeof(*codes); i++)
+        if ((level = G_UnitAbilityLevel(target, codes[i]))) { code = codes[i]; break; }
+    if (!code || (float)(rand() % 100) >= S_SpellData(code, level, 1)) return damage;
+    return MAX((int)S_SpellData(code, level, 2), damage - (int)S_SpellData(code, level, 3));
+}
