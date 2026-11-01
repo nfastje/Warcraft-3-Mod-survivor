@@ -40,7 +40,7 @@ downloads about 200 mo of game data, once.
 - **Earned progression**: you start with four heroes (Archmage, Blademaster, Death Knight, Demon
   Hunter) and five talents (Strength, Agility, Intellect, Stamina, Armor). The other heroes join as
   you play: slay a boss, survive five minutes, win with their faction, or clear zones for the Tavern.
-  The other talents open with achievements.
+  The other talents, and most stat cards, open with achievements.
 - A damage meter, floating damage numbers, rebindable keys, mouse or keyboard movement, and
   separate volume for music, spells, units and ambience.
 

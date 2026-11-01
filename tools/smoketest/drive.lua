@@ -478,9 +478,23 @@ for key, def in pairs(SPELLS) do
         check((def.mana or 0) > 0, key .. ' casts, so it costs mana')
     end
 end
+-- Cards: each shows its key (Ctrl+1...), and a stat card still locked by its
+-- achievement is never offered.
+local Cards = upvalue(G.tryOpenHand, 'Cards')
+local BLESSING_BY_KEY = {}
+for _, b in ipairs(upvalue(Cards.options, 'BLESSINGS')) do BLESSING_BY_KEY[b.key] = b end
+local savedAch = Profile.data.ach
+Profile.data.ach = {}
+for _, o in ipairs(Cards.options({})) do
+    check(o.type ~= 'blessing' or BLESSING_BY_KEY[o.key].unlock == nil, o.key .. ' is offered while locked')
+end
+Profile.data.ach = savedAch
+Cards.open('level')
+check(MOCK.findText('Ctrl+1') and MOCK.findText('Ctrl+3'), 'cards show their Ctrl keys')
+MOCK.tap(OSKEY_1, CTRL)
 G.endRun(false)
 MOCK.click('Return to Camp')
-note('mana and keys: waits when short, 1 casts, Shift+1 autocast, new spells manual')
+note('mana and keys: waits when short, 1 casts, Shift+1 autocast, new spells manual, Ctrl card keys, locked cards')
 
 -- Items: every one has two or three stats (or all attributes) and a tooltip;
 -- the signature ones carry an effect, and each effect works in a run.
@@ -607,6 +621,9 @@ for index, hero in ipairs(HEROES) do
         inst.rank = SPELLS[key].maxRank or 15
     end
     G.recomputeStats()
+    for i, key in ipairs(hero.pool) do
+        check(run.slots[i] and run.slots[i].def.key == key, hero.name .. ': ' .. key .. ' sits in slot ' .. i)
+    end
     if run.spellByKey.mirror_image then
         G.mirrorImages(2, 200)
         local image = next(run.images)

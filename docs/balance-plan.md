@@ -340,6 +340,20 @@ Balance report after it: with every spell on autocast the Blademaster's mana sit
 first would-be deaths 2:30 to 6:40. The report hit harder than the game last round (it said 5 to 9 minutes
 when the play test never felt threatened), so the enemies stay this strong until the next play test.
 
+### Play test 1, second round (2026-11-01)
+
+- Spells sit in fixed slots: a spell's slot and key are its place in the hero's Warcraft III order (`def.pool`,
+  `R.slots`), whatever order it is learned in. `R.spells` stays the list in learning order.
+- Cards show their key (Ctrl+1 by default, from the binding).
+- End screen: achievements get a line each while they fit above the DAMAGE rule (three lines under the loot,
+  five without loot), else one line naming the first three.
+- Stat cards: the hero's primary attribute is drawn most (weight 4), the other attributes next (2.2), the rest
+  1.4 (`BLESSING_WEIGHT`). Only the five attributes, Ferocity, Swiftness and Regeneration are offered from the
+  start; the others open with an achievement (`BLESSING_UNLOCKS`): Haste (Slayer), Reach (Survivor), Precision
+  (Ascendant), Vampirism (Boss Hunter), Brutality (Exterminator), Magnetism (Veteran), Wisdom (Scholar), Greed
+  (Hoarder), Fortune (Collector), Persistence (Westfall), Multishot (Heroic). The codex says what opens a locked
+  one. Quests (phase 6) will open some of them too.
+
 Next: more play tests, then more rounds (zone powers past Ashenvale, hero outliers such as Blizzard and
 Bladestorm, Heroic and Mythic multipliers).
 

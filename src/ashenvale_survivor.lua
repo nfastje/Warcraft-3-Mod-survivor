@@ -897,6 +897,18 @@ do
     for _, b in ipairs(BLESSINGS) do
         BLESSING_BY_KEY[b.key] = b
     end
+    -- The five attributes, Ferocity, Swiftness and Regeneration are offered
+    -- from the start; every other card opens with an achievement
+    -- (Profile.blessingOpen), and quests will open some (phase 6).
+    local BLESSING_UNLOCKS = {haste = 'slayer', reach = 'survivor', precision = 'ascendant', vampirism = 'boss_hunter',
+        brutality = 'exterminator', magnetism = 'veteran', wisdom = 'scholar', greed = 'hoarder', fortune = 'collector',
+        persistence = 'zone2', multishot = 'heroic'}
+    for key, unlock in pairs(BLESSING_UNLOCKS) do
+        BLESSING_BY_KEY[key].unlock = unlock
+    end
+    -- How often a card is drawn: the hero's primary attribute most, then the
+    -- other attributes, then the rest.
+    local BLESSING_WEIGHT = {primary = 4.0, attribute = 2.2, other = 1.4}
 
     ---------------------------------------------------------------------------
     -- Zones. Each one re-themes the same arena: enemies, bosses, fog and time
@@ -1936,6 +1948,10 @@ do
     -- Talents and heroes with an unlock open once that achievement is earned.
     function Profile.talentOpen(talent)
         return talent.unlock == nil or Profile.data.ach[talent.unlock] ~= nil
+    end
+
+    function Profile.blessingOpen(b)
+        return b.unlock == nil or Profile.data.ach[b.unlock] ~= nil
     end
 
     function Profile.heroOpen(hero)
@@ -5094,7 +5110,7 @@ do
 
     -- A spell's key or a click on its slot: casts it if ready and paid for.
     function G.castSpell(i)
-        local inst = R and not R.ended and not R.paused and R.spells[i]
+        local inst = R and not R.ended and not R.paused and R.slots[i]
         if not G.canToggle(inst) or R.split or inst.cd > 0 or R.mana < inst.v.mana then
             return
         end
@@ -5112,7 +5128,7 @@ do
     end
 
     function G.toggleSpell(i)
-        local inst = R and not R.ended and R.spells[i]
+        local inst = R and not R.ended and R.slots[i]
         if not G.canToggle(inst) then
             return
         end
@@ -5125,6 +5141,23 @@ do
             auto = CFG.AUTOCAST or Engine.touch() or (Engine.active() and EngineCvar('survivor_autocast') == '1')}
         R.spells[#R.spells + 1] = inst
         R.spellByKey[key] = inst
+        -- Every spell has its own slot (and key): its place in the hero's
+        -- Warcraft III command card order (def.pool), whatever order they
+        -- are learned in. A spell from outside the pool takes the first free slot.
+        local slot = nil
+        for i, poolKey in ipairs(R.def.pool) do
+            if poolKey == key and i <= CFG.SPELL_SLOTS and R.slots[i] == nil then
+                slot = i
+            end
+        end
+        for i = 1, CFG.SPELL_SLOTS do
+            if slot == nil and R.slots[i] == nil then
+                slot = i
+            end
+        end
+        if slot then
+            R.slots[slot] = inst
+        end
         G.recomputeStats()
         return inst
     end
@@ -5597,7 +5630,7 @@ do
         R = {def = def, zone = zone, zoneIndex = S.zone, diff = G.difficulty(S.difficulty, S.keyLevel), diffIndex = S.difficulty,
             time = 0, paused = false, ended = false, level = 1, xp = 0, xpNext = G.xpFor(1),
             kills = 0, gold = 0, bosses = 0, damageDone = 0, damageTaken = 0,
-            spells = {}, spellByKey = {}, blessings = {}, blessingOrder = {}, buffs = {}, banished = {},
+            spells = {}, slots = {}, spellByKey = {}, blessings = {}, blessingOrder = {}, buffs = {}, banished = {},
             enemies = {}, enemyCount = 0, elist = {}, ex = {}, ey = {}, en = 0,
             summons = {}, corpses = {}, pickups = {}, projectiles = {}, lines = {}, fx = {}, lightnings = {}, sched = {},
             meter = {}, loot = {}, pendingLevels = 0, pendingChests = 0, hand = nil, handsDealt = 0,
@@ -6186,7 +6219,7 @@ do
     -- A spell slot: its name and rank, kind and cooldown, and what it does
     -- at its current rank and power.
     function Hud.spellTip(i)
-        local inst = R and R.spells[i]
+        local inst = R and R.slots[i]
         if inst == nil then
             return
         end
@@ -6391,7 +6424,7 @@ do
             return
         end
         for i, slot in ipairs(Hud.slots) do
-            local inst = R.spells[i]
+            local inst = R.slots[i]
             local castable = G.canToggle(inst)
             local state = 'empty'
             if castable then
@@ -6419,7 +6452,7 @@ do
 
     function Hud.refreshSpells()
         for i, slot in ipairs(Hud.slots) do
-            local inst = R.spells[i]
+            local inst = R.slots[i]
             -- A new icon resets the tint: Hud.refreshSlotStates paints it again.
             slot.state = nil
             if inst then
@@ -6521,7 +6554,7 @@ do
         UI.setBar(Hud.xp, R.xp / R.xpNext, 'Level ' .. R.level .. '     ' .. math.floor(R.xp) .. ' / ' .. R.xpNext)
 
         for i, slot in ipairs(Hud.slots) do
-            local inst = R.spells[i]
+            local inst = R.slots[i]
             if inst then
                 local kind = inst.def.kind
                 local fraction = 0
@@ -6606,8 +6639,9 @@ do
         card.bg = cardPart(card, UI.frame(root, TPL.panel, 0, 0.6, w, h), 0, 0, w, h)
         BlzFrameSetTexture(card.bg, TEX.clear, 0, true)
         card.edge = {cardPart(card, UI.border(root, 0, 0.6, w - 0.02, h - 0.02)[1], 0.01, -0.01, w - 0.02, h - 0.02)}
-        cardPart(card, UI.frame(root, TPL.well, 0, 0.6, 0.022, 0.022), 0.014, -0.014, 0.022, 0.022)
-        card.badge = cardPart(card, UI.text(root, tostring(index), 0, 0.6, 0.022, 0.022, 0.01, TEXT_JUSTIFY_CENTER), 0.014, -0.014, 0.022, 0.022)
+        -- The card's key (Ctrl+1 by default), set by Cards.render.
+        cardPart(card, UI.frame(root, TPL.well, 0, 0.6, 0.036, 0.02), 0.012, -0.014, 0.036, 0.02)
+        card.badge = cardPart(card, UI.text(root, tostring(index), 0, 0.6, 0.036, 0.02, 0.0072, TEXT_JUSTIFY_CENTER), 0.012, -0.014, 0.036, 0.02)
         card.iconFrame = cardPart(card, UI.box(root, 0, 0.6, 0.064, 0.064, 255, 255, 255, 255, TEX.iconFrame), w / 2 - 0.032, -0.03, 0.064, 0.064)
         card.icon = cardPart(card, UI.image(root, TEX.white, 0, 0.6, 0.054, 0.054), w / 2 - 0.027, -0.035, 0.054, 0.054)
         card.rarityText = cardPart(card, UI.text(root, '', 0, 0.6, w, 0.012, 0.0074, TEXT_JUSTIFY_CENTER), 0, -0.097, w, 0.012)
@@ -6716,9 +6750,12 @@ do
                 end
             end
         end
+        local primary = ({str = 'strength', agi = 'agility', int = 'intellect'})[R.def.primary]
         for _, b in ipairs(BLESSINGS) do
-            if not R.banished[b.key] and not exclude[b.key] then
-                list[#list + 1] = {type = 'blessing', key = b.key, w = 1.6}
+            if not R.banished[b.key] and not exclude[b.key] and Profile.blessingOpen(b) then
+                local w = b.key == primary and BLESSING_WEIGHT.primary
+                    or b.attribute and BLESSING_WEIGHT.attribute or BLESSING_WEIGHT.other
+                list[#list + 1] = {type = 'blessing', key = b.key, w = w}
             end
         end
         return list
@@ -6857,6 +6894,7 @@ do
             if c then
                 Cards.moveCard(card, x0 + (i - 1) * (CARD_W + CARD_GAP), 0.415)
                 Cards.fill(card, c)
+                BlzFrameSetText(card.badge, Keys.label('card' .. i))
                 Cards.showCard(card, true)
                 local canBanish = R.banishes > 0 and (c.type == 'spell' or c.type == 'blessing')
                 UI.showButton(card.banish, R.banishes > 0)
@@ -6867,7 +6905,7 @@ do
             end
         end
         for i, slot in ipairs(Cards.slots) do
-            local inst = R.spells[i]
+            local inst = R.slots[i]
             if inst then
                 UI.setIcon(slot, U.spellIcon(inst.def))
             else
@@ -7073,15 +7111,33 @@ do
                 lines[#lines + 1] = U.col(RED, 'Keystone +' .. run.diff.level .. ' depleted') .. U.col(GREY, '  -  not in time')
             end
         end
-        for i, a in ipairs(run.newAchievements or {}) do
-            if i <= 4 then
+        local rank = ZONES[run.zoneIndex].rank
+        local zoneLine = nil
+        if run.victory and not run.endless and rank < #ZONES and Profile.data.unlocked > rank then
+            zoneLine = U.col(GREEN, ZONES[ZONE_ORDER[rank + 1]].name .. ' is open.')
+        end
+        -- The box ends at the DAMAGE rule: three lines under the loot, five
+        -- without loot (it moves up). Achievements get a line each while
+        -- they fit, else one line that names the first three.
+        local budget = #run.loot > 0 and 3 or 5
+        local earned = run.newAchievements or {}
+        if #lines + #earned + (zoneLine and 1 or 0) <= budget then
+            for _, a in ipairs(earned) do
                 lines[#lines + 1] = U.col(GOLD, 'Achievement: ') .. a.name .. U.col(GREY, '  +' .. a.points)
             end
+        else
+            local names, points = {}, 0
+            for i, a in ipairs(earned) do
+                points = points + a.points
+                if i <= 3 then
+                    names[#names + 1] = a.name
+                end
+            end
+            lines[#lines + 1] = U.col(GOLD, #earned .. ' achievements') .. U.col(GREY, '  +' .. points .. ': ')
+                .. table.concat(names, ', ') .. (#earned > 3 and U.col(GREY, ' and ' .. (#earned - 3) .. ' more') or '')
         end
-        local rank = ZONES[run.zoneIndex].rank
-        if run.victory and not run.endless and rank < #ZONES and Profile.data.unlocked > rank then
-            lines[#lines + 1] = U.col(GREEN, ZONES[ZONE_ORDER[rank + 1]].name .. ' is open.')
-        end
+        lines[#lines + 1] = zoneLine
+        UI.place(Finale.achievements, 0.422, #run.loot > 0 and 0.31 or 0.37, 0.196, #run.loot > 0 and 0.04 or 0.1)
         BlzFrameSetText(Finale.achievements, table.concat(lines, '\n'))
         local rows = {}
         for key, amount in pairs(run.meter) do
@@ -8737,7 +8793,9 @@ do
             BlzFrameSetText(X.name, seen and U.col(GOLD, b.name) or U.col('6e665c', b.name))
             BlzFrameSetText(X.sub, U.col(GREY, 'Blessing' .. rankNote(nil)))
             BlzFrameSetText(X.body, U.col('d8cfc0', G.describeBlessing(b, b.per) .. ' per rank.'))
-            BlzFrameSetText(X.heroes, U.col(GREY, 'Offered to every hero. Takes no spell slot.'))
+            BlzFrameSetText(X.heroes, U.col(GREY, 'Offered to every hero. Takes no spell slot.')
+                .. (Profile.blessingOpen(b) and '' or ('\n\n' .. U.col(RED, 'Locked.  ') .. U.col(GREY, 'Opens with ')
+                    .. Profile.unlockText(b.unlock))))
         end
     end
 
