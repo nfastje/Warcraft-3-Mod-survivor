@@ -232,8 +232,13 @@ SDK), host-authoritative, agreed balance, resource estimates. The user is still 
   Blizzard maps). Tester builds go to GitHub Releases (the 4 MB SFX has no Blizzard data).
 - `engine/dist/` is build output and ignored (`engine/.gitignore`); anything hand-written that
   lives only there must move into a tracked folder.
-- Tests load and may save the real profile (`%APPDATA%\warcraft-3\CustomMapData\WarcraftSurvivors\profile.pld`):
-  back it up first and compare after.
+- Tests load and may save the real profile (`%APPDATA%\warcraft-3\CustomMapData\WarcraftSurvivors\profile2.pld`
+  since save version 2; `profile.pld` is the old version 1 save, kept as a backup): back it up first and compare
+  after, or run the engine with `APPDATA` pointing at an empty folder.
+- Balance and mechanics pass: `docs/balance-plan.md` (phases, decisions, what each phase changed). Phase 1
+  (2026-11-01): Warcraft III attributes per hero (`HEROES` `primary`/`attr`/`gain`), Stamina health, spell power,
+  attribute stat cards; tuning numbers in `CFG`. New icons must already be in `tools/web_trace_reads.txt`, or the
+  trimmed game data lacks them.
 - Loading screens never reach `+screenshot`; capture only the game window with `PrintWindow`.
 - Test aids: `+set survivor_tab codex` opens a lobby tab; `+set survivor_menu keys` opens the options
   at a page (`main`, `audio`, `keys`, `interface`); `+set survivor_run "5 1 1 2"` (hero, zone,

@@ -46,7 +46,7 @@ LEGACY = r"C:\Program Files (x86)\Warcraft III (Legacy)"
 READS = ROOT / "tools" / "web_trace_reads.txt"
 LISTFILE = ROOT / "engine" / "tools" / "WarcraftIIIFileListZezulaLadik.txt"
 APPDATA = pathlib.Path(os.environ.get("APPDATA", "")) / "warcraft-3"
-SAVED = [APPDATA / "CustomMapData" / "WarcraftSurvivors" / "profile.pld", APPDATA / "config.cfg"]
+SAVED = [APPDATA / "CustomMapData" / "WarcraftSurvivors" / "profile2.pld", APPDATA / "config.cfg"]
 SCRIPTS = "Scripts/Survivor/ashenvale_survivor.lua,Scripts/Survivor/engine_boot.lua"
 MENU_MAP = "Maps/FrozenThrone/(6)Moonglade.w3x"
 

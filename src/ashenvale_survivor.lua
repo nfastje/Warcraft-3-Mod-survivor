@@ -37,6 +37,16 @@ do
         WORLD_OBJECT_REACH = 150.0,  -- walking this close to one uses it
         HIT_FEEDBACK = 0.2,          -- seconds between two blood splashes on the hero
         HAND_SIZE = 3,
+        -- Warcraft III attributes (see G.recomputeStats). Health follows the
+        -- game's own rule, with Stamina in Strength's place. Spell power is 1
+        -- at the hero's level 1 primary attribute.
+        HP_BASE = 100,
+        HP_PER_STAMINA = 25,
+        REGEN_PER_STRENGTH = 0.05,   -- health per second
+        ATTACK_SPEED_PER_AGILITY = 0.01,
+        ARMOR_PER_AGILITY = 0.15,
+        SPELL_POWER_PER_POINT = 0.01,
+        STACK_FALLOFF = 0.85,        -- each further pick of the same stat card gives 85 percent of the one before
         BASE_PICKUP = 170.0,
         BASE_REROLLS = 2,
         BASE_BANISHES = 1,
@@ -48,7 +58,10 @@ do
         SHOW_MINIMAP = false,
         SHOW_PORTRAIT = true,
         ENEMY_PLAYER = 11,
-        SAVE_FILE = 'WarcraftSurvivors\\profile.pld',
+        -- Version 2 (attributes, 2026-11-01) started every profile over in a
+        -- new file: profile.pld, the version 1 save, is left as it was.
+        SAVE_FILE = 'WarcraftSurvivors\\profile2.pld',
+        SAVE_VERSION = 'WS2',
         FONT = 'Fonts\\FRIZQT__.TTF',
     }
 
@@ -233,91 +246,119 @@ do
             apply = function(s) s.gold = s.gold + 0.20; s.crit = s.crit + 0.05 end}
     }
 
-    -- Every hero: rawcode, fallback icon, base stats, a starting spell and its
-    -- four Warcraft III abilities, the only spells its level-up cards offer.
+    -- Every hero: rawcode, fallback icon, a starting spell and its four
+    -- Warcraft III abilities, the only spells its level-up cards offer.
+    -- Attributes are Warcraft III's (UnitBalance.slk): attr at level 1, gain
+    -- per level, the primary one. damage is the weapon's own: the primary
+    -- attribute adds to it. armor is the unit's own armor.
     local HEROES = {
         {id = 'Hamg', name = 'Archmage', faction = 'Alliance', icon = 'BTNHeroArchMage', role = 'Frost caster',
-            hp = 330, damage = 26, blurb = 'Freezes whole packs in place and lets the storm do the work.',
+            primary = 'int', attr = {str = 14, agi = 17, int = 19}, gain = {str = 1.8, agi = 1, int = 3.2}, damage = 7,
+            blurb = 'Freezes whole packs in place and lets the storm do the work.',
             start = 'blizzard', pool = {'blizzard', 'water_elemental', 'brilliance', 'arcane_missiles'}},
         {id = 'Hmkg', name = 'Mountain King', faction = 'Alliance', icon = 'BTNHeroMountainKing', role = 'Bruiser',
-            hp = 470, damage = 34, blurb = 'Hammers and thunder. Stuns anything foolish enough to stand close.',
+            primary = 'str', attr = {str = 24, agi = 11, int = 15}, gain = {str = 3, agi = 1.5, int = 1.5}, damage = 10, armor = 1,
+            blurb = 'Hammers and thunder. Stuns anything foolish enough to stand close.',
             start = 'storm_bolt', pool = {'storm_bolt', 'thunder_clap', 'bash', 'avatar'}},
         {id = 'Hpal', name = 'Paladin', faction = 'Alliance', icon = 'BTNHeroPaladin', role = 'Holy guardian',
-            hp = 480, damage = 30, blurb = 'Hard to kill and harder to outlast. Heals himself between swings.',
+            primary = 'str', attr = {str = 22, agi = 13, int = 17}, gain = {str = 2.7, agi = 1.5, int = 1.8}, damage = 8, armor = 2,
+            blurb = 'Hard to kill and harder to outlast. Heals himself between swings.',
             start = 'holy_light', pool = {'holy_light', 'divine_shield', 'devotion_aura', 'resurrection'}},
         {id = 'Hblm', name = 'Blood Mage', faction = 'Alliance', icon = 'BTNHeroBloodElfPrince', role = 'Fire caster',
-            hp = 320, damage = 27, blurb = 'Sets the ground ablaze and keeps a phoenix circling close.',
+            primary = 'int', attr = {str = 18, agi = 14, int = 19}, gain = {str = 2, agi = 1, int = 3}, damage = 8,
+            blurb = 'Sets the ground ablaze and keeps a phoenix circling close.',
             start = 'flame_strike', pool = {'flame_strike', 'banish', 'siphon_mana', 'phoenix'}},
 
         {id = 'Obla', name = 'Blademaster', faction = 'Horde', icon = 'BTNHeroBlademaster', role = 'Duelist', castAnim = 'attack slam',
-            hp = 430, damage = 36, blurb = 'Spins through the horde. Every swing can turn into a critical strike.',
+            primary = 'agi', attr = {str = 18, agi = 24, int = 16}, gain = {str = 2, agi = 1.75, int = 2.25}, damage = 12,
+            blurb = 'Spins through the horde. Every swing can turn into a critical strike.',
             start = 'bladestorm', pool = {'wind_walk', 'mirror_image', 'critical_strike', 'bladestorm'}},
         {id = 'Ofar', name = 'Far Seer', faction = 'Horde', icon = 'BTNHeroFarseer', role = 'Storm caller',
-            hp = 340, damage = 27, blurb = 'Lightning leaps from foe to foe while spirit wolves hold the line.',
+            primary = 'int', attr = {str = 15, agi = 18, int = 19}, gain = {str = 2, agi = 1, int = 3}, damage = 8,
+            blurb = 'Lightning leaps from foe to foe while spirit wolves hold the line.',
             start = 'chain_lightning', pool = {'chain_lightning', 'far_sight', 'feral_spirit', 'earthquake'}},
         {id = 'Otch', name = 'Tauren Chieftain', faction = 'Horde', icon = 'BTNHeroTaurenChieftain', role = 'Juggernaut',
-            hp = 520, damage = 35, blurb = 'Shockwaves split the field. Comes back once when he falls.',
+            primary = 'str', attr = {str = 25, agi = 10, int = 15}, gain = {str = 3.2, agi = 1.5, int = 1.3}, damage = 10, armor = 1,
+            blurb = 'Shockwaves split the field. Comes back once when he falls.',
             start = 'shockwave', pool = {'shockwave', 'war_stomp', 'endurance_aura', 'reincarnation'}},
         {id = 'Oshd', name = 'Shadow Hunter', faction = 'Horde', icon = 'BTNShadowHunter', role = 'Witch doctor',
-            hp = 350, damage = 26, blurb = 'Serpent wards and voodoo spirits fight for him. Hard to pin down.',
+            primary = 'agi', attr = {str = 15, agi = 20, int = 17}, gain = {str = 2, agi = 1.5, int = 2.5}, damage = 6,
+            blurb = 'Serpent wards and voodoo spirits fight for him. Hard to pin down.',
             start = 'serpent_ward', pool = {'healing_wave', 'hex', 'serpent_ward', 'big_bad_voodoo'}},
 
         {id = 'Udea', name = 'Death Knight', faction = 'Undead', icon = 'BTNHeroDeathKnight', role = 'Unholy knight',
-            hp = 470, damage = 33, blurb = 'Death Coil from range, an army of the dead up close.',
+            primary = 'str', attr = {str = 23, agi = 12, int = 17}, gain = {str = 2.7, agi = 1.5, int = 1.8}, damage = 10, armor = 1,
+            blurb = 'Death Coil from range, an army of the dead up close.',
             start = 'death_coil', pool = {'death_coil', 'death_pact', 'unholy_aura', 'animate_dead'}},
         {id = 'Udre', name = 'Dreadlord', faction = 'Undead', icon = 'BTNHeroDreadLord', role = 'Vampire',
-            hp = 430, damage = 31, blurb = 'Bats tear through lines and every blow feeds him.',
+            primary = 'str', attr = {str = 20, agi = 16, int = 18}, gain = {str = 2.5, agi = 1, int = 2.5}, damage = 11,
+            blurb = 'Bats tear through lines and every blow feeds him.',
             start = 'carrion_swarm', pool = {'carrion_swarm', 'sleep', 'vampiric_aura', 'inferno'}},
         {id = 'Ulic', name = 'Lich', faction = 'Undead', icon = 'BTNLichVersion2', role = 'Frost necromancer',
-            hp = 320, damage = 26, blurb = 'Frost Nova and orbiting ice shards. Nothing moves fast near him.',
+            primary = 'int', attr = {str = 15, agi = 14, int = 20}, gain = {str = 2, agi = 1, int = 3.4}, damage = 6,
+            blurb = 'Frost Nova and orbiting ice shards. Nothing moves fast near him.',
             start = 'frost_nova', pool = {'frost_nova', 'frost_armor', 'dark_ritual', 'death_and_decay'}},
         {id = 'Ucrl', name = 'Crypt Lord', faction = 'Undead', icon = 'BTNHeroCryptLord', role = 'Swarm tank',
-            hp = 540, damage = 33, blurb = 'Impales whole lines and hides under a shell of spikes.',
+            primary = 'str', attr = {str = 26, agi = 14, int = 14}, gain = {str = 3.2, agi = 1.2, int = 1.6}, damage = 7,
+            blurb = 'Impales whole lines and hides under a shell of spikes.',
             start = 'impale', pool = {'impale', 'spiked_carapace', 'carrion_beetles', 'locust_swarm'}},
 
         {id = 'Edem', name = 'Demon Hunter', faction = 'Night Elf', icon = 'BTNHeroDemonHunter', role = 'Burning blade',
-            hp = 420, damage = 33, blurb = 'Burns everything around him and slips through attacks.',
+            primary = 'agi', attr = {str = 19, agi = 22, int = 16}, gain = {str = 2.4, agi = 1.5, int = 2.1}, damage = 11,
+            blurb = 'Burns everything around him and slips through attacks.',
             start = 'immolation', pool = {'mana_burn', 'immolation', 'evasion', 'metamorphosis'}},
         {id = 'Ekee', name = 'Keeper of the Grove', short = 'Keeper', faction = 'Night Elf', icon = 'BTNKeeperOfTheGrove', role = 'Nature caller',
-            hp = 360, damage = 27, blurb = 'Roots the swarm in place while treants wade in.',
+            primary = 'int', attr = {str = 16, agi = 15, int = 19}, gain = {str = 1.8, agi = 1.5, int = 2.7}, damage = 8,
+            blurb = 'Roots the swarm in place while treants wade in.',
             start = 'entangling_roots', pool = {'entangling_roots', 'force_of_nature', 'thorns_aura', 'tranquility'}},
         {id = 'Emoo', name = 'Priestess of the Moon', short = 'Priestess', faction = 'Night Elf', icon = 'BTNPriestessOfTheMoon', role = 'Archer',
-            hp = 340, damage = 30, blurb = 'Volleys of searing arrows under a falling sky.',
+            primary = 'agi', attr = {str = 18, agi = 19, int = 15}, gain = {str = 1.9, agi = 1.5, int = 2.6}, damage = 11,
+            blurb = 'Volleys of searing arrows under a falling sky.',
             start = 'searing_arrows', pool = {'scout', 'searing_arrows', 'trueshot_aura', 'starfall'}},
         {id = 'Ewar', name = 'Warden', faction = 'Night Elf', icon = 'BTNHeroWarden', role = 'Assassin',
-            hp = 380, damage = 32, blurb = 'Fans of knives in every direction and spirits of vengeance behind.',
+            primary = 'agi', attr = {str = 18, agi = 20, int = 15}, gain = {str = 2.4, agi = 1.6, int = 2}, damage = 12,
+            blurb = 'Fans of knives in every direction and spirits of vengeance behind.',
             start = 'fan_of_knives', pool = {'fan_of_knives', 'blink_strike', 'shadow_strike', 'vengeance'}},
 
         {id = 'Nngs', name = 'Naga Sea Witch', faction = 'Tavern', icon = 'BTNNagaSeaWitch', role = 'Tide caller',
-            hp = 340, damage = 27, blurb = 'Forked lightning and crushing tides, behind a mana shield.',
+            primary = 'int', attr = {str = 15, agi = 16, int = 22}, gain = {str = 2, agi = 1, int = 3}, damage = 5,
+            blurb = 'Forked lightning and crushing tides, behind a mana shield.',
             start = 'forked_lightning', pool = {'forked_lightning', 'frost_arrows', 'mana_shield', 'tornado'}},
         {id = 'Nbrn', name = 'Dark Ranger', faction = 'Tavern', icon = 'BTNBansheeRanger', role = 'Ranger',
-            hp = 330, damage = 30, blurb = 'Black arrows and drained life. Never stops shooting.',
+            primary = 'agi', attr = {str = 18, agi = 21, int = 15}, gain = {str = 1.9, agi = 1.5, int = 2.6}, damage = 9,
+            blurb = 'Black arrows and drained life. Never stops shooting.',
             start = 'black_arrow', pool = {'silence', 'black_arrow', 'life_drain', 'charm'}},
         {id = 'Nbst', name = 'Beastmaster', faction = 'Tavern', icon = 'BTNBeastMaster', role = 'Pack leader',
-            hp = 450, damage = 31, blurb = 'Brings a bear, a quilbeast and a stampede to every fight.',
+            primary = 'str', attr = {str = 22, agi = 14, int = 15}, gain = {str = 2.9, agi = 1.3, int = 1.8}, damage = 9,
+            blurb = 'Brings a bear, a quilbeast and a stampede to every fight.',
             start = 'summon_bear', pool = {'summon_bear', 'summon_quilbeast', 'summon_hawk', 'stampede'}},
         {id = 'Npbm', name = 'Pandaren Brewmaster', short = 'Brewmaster', faction = 'Tavern', icon = 'BTNPandarenBrewmaster', role = 'Brawler',
-            hp = 470, damage = 32, blurb = 'Breathes fire, staggers out of harm and splits into elements.',
+            primary = 'str', attr = {str = 22, agi = 14, int = 15}, gain = {str = 3, agi = 1.5, int = 1.5}, damage = 10, armor = 1,
+            blurb = 'Breathes fire, staggers out of harm and splits into elements.',
             start = 'breath_of_fire', pool = {'breath_of_fire', 'drunken_haze', 'drunken_brawler', 'storm_earth_fire'}},
         {id = 'Nfir', name = 'Firelord', faction = 'Tavern', icon = 'BTNHeroAvatarOfFlame', role = 'Living flame',
-            hp = 400, damage = 29, blurb = 'Soul Burn, lava spawn and a volcano under the enemy.',
+            primary = 'agi', attr = {str = 15, agi = 20, int = 18}, gain = {str = 2, agi = 1.6, int = 2.5}, damage = 9,
+            blurb = 'Soul Burn, lava spawn and a volcano under the enemy.',
             start = 'soul_burn', pool = {'soul_burn', 'lava_spawn', 'incinerate', 'volcano'}},
         {id = 'Ntin', name = 'Goblin Tinker', faction = 'Tavern', icon = 'BTNHeroTinker', role = 'Engineer',
-            hp = 380, damage = 28, blurb = 'Rockets, a goblin factory and a robot suit when it gets close.',
+            primary = 'int', attr = {str = 20, agi = 15, int = 20}, gain = {str = 2.4, agi = 1, int = 2.6}, damage = 8, armor = 2,
+            blurb = 'Rockets, a goblin factory and a robot suit when it gets close.',
             start = 'cluster_rockets', pool = {'pocket_factory', 'cluster_rockets', 'engineering', 'robo_goblin'}},
         {id = 'Nalc', name = 'Goblin Alchemist', faction = 'Tavern', icon = 'BTNHeroAlchemist', role = 'Chemist',
-            hp = 430, damage = 30, blurb = 'Acid, healing spray and a chemical rage. Turns kills into gold.',
+            primary = 'str', attr = {str = 25, agi = 10, int = 18}, gain = {str = 3.3, agi = 1, int = 2}, damage = 5,
+            blurb = 'Acid, healing spray and a chemical rage. Turns kills into gold.',
             start = 'acid_bomb', pool = {'healing_spray', 'chemical_rage', 'acid_bomb', 'transmute'}},
         {id = 'Nplh', name = 'Pit Lord', faction = 'Tavern', icon = 'BTNPitLord', role = 'Demon',
-            hp = 540, damage = 34, blurb = 'Rains fire on the battlefield and cleaves what survives.',
+            primary = 'str', attr = {str = 26, agi = 14, int = 14}, gain = {str = 3.2, agi = 1.3, int = 1.5}, damage = 8,
+            blurb = 'Rains fire on the battlefield and cleaves what survives.',
             start = 'rain_of_fire', pool = {'rain_of_fire', 'howl_of_terror', 'cleave', 'doom'}},
         -- Not a Warcraft III hero: the campaign's Prophet (nmed, a plain unit).
         -- His model has no Attack or Spell of its own, only Spell Attack, and a
         -- raven form (the Alternate sequences, see Raven Form).
         {id = 'nmed', name = 'Medivh', faction = 'Tavern', icon = 'BTNMedivh', role = 'Last Guardian',
             attackAnim = 'spell', castAnim = 'spell',
-            hp = 350, damage = 28, blurb = 'The Last Guardian of Tirisfal: arcane fire, a storm of crows, and the portal that let the Horde in.',
+            primary = 'int', attr = {str = 15, agi = 14, int = 22}, gain = {str = 1.6, agi = 1, int = 3.3}, damage = 6,
+            blurb = 'The Last Guardian of Tirisfal: arcane fire, a storm of crows, and the portal that let the Horde in.',
             start = 'arcane_barrage', pool = {'arcane_barrage', 'raven_form', 'enchanted_crows', 'dark_portal'}}
     }
 
@@ -731,27 +772,34 @@ do
 
     ---------------------------------------------------------------------------
     -- Blessings: generic stat cards any hero can draw. They take no spell slot.
+    -- The five attributes add whole points (rarity rounds them up). Every
+    -- other card gives less with each further pick (CFG.STACK_FALLOFF).
+    -- Icons are the Warcraft III items that give the stat.
     ---------------------------------------------------------------------------
     local BLESSINGS = {
-        {key = 'might', name = 'Might', code = 'ratc', icon = 'BTNClawsOfAttack', per = 0.10,
-            desc = '+{v}\037 damage', apply = function(s, x) s.damage = s.damage + x end},
+        {key = 'strength', name = 'Strength', code = 'rst1', icon = 'BTNGauntletsOfOgrePower', per = 5, flat = true, attribute = true,
+            desc = '+{v} Strength', apply = function(s, x) s.str = s.str + x end},
+        {key = 'agility', name = 'Agility', code = 'hcun', icon = 'BTNHoodOfCunning', per = 5, flat = true, attribute = true,
+            desc = '+{v} Agility', apply = function(s, x) s.agi = s.agi + x end},
+        {key = 'intellect', name = 'Intellect', code = 'ciri', icon = 'BTNRobeOfTheMagi', per = 5, flat = true, attribute = true,
+            desc = '+{v} Intellect', apply = function(s, x) s.int = s.int + x end},
+        {key = 'stamina', name = 'Stamina', code = 'prvt', icon = 'BTNPeriapt', per = 3, flat = true, attribute = true,
+            desc = '+{v} Stamina', apply = function(s, x) s.sta = s.sta + x end},
+        {key = 'armor', name = 'Armor', code = 'rde1', icon = 'BTNRingJadeFalcon', per = 2, flat = true, attribute = true,
+            desc = '+{v} armor', apply = function(s, x) s.armor = s.armor + x end},
         {key = 'ferocity', name = 'Ferocity', code = 'gcel', icon = 'BTNGlove', per = 0.12,
             desc = '+{v}\037 attack speed', apply = function(s, x) s.attackSpeed = s.attackSpeed + x end},
         {key = 'haste', name = 'Haste', code = 'rwiz', icon = 'BTNSobiMask', per = 0.06,
             desc = 'Spells recharge {v}\037 faster', apply = function(s, x) s.cdr = s.cdr + x end},
-        {key = 'reach', name = 'Reach', code = 'ciri', icon = 'BTNRobeOfTheMagi', per = 0.12,
+        {key = 'reach', name = 'Reach', code = 'ofir', icon = 'BTNOrbOfFire', per = 0.12,
             desc = '+{v}\037 area of effect', apply = function(s, x) s.area = s.area + x end},
         {key = 'swiftness', name = 'Swiftness', code = 'bspd', icon = 'BTNBootsOfSpeed', per = 0.07,
             desc = '+{v}\037 movement speed', apply = function(s, x) s.move = s.move + x end},
-        {key = 'vigor', name = 'Vigor', code = 'prvt', icon = 'BTNPeriapt', per = 60, flat = true,
-            desc = '+{v} maximum health', apply = function(s, x) s.maxHp = s.maxHp + x end},
         {key = 'regeneration', name = 'Regeneration', code = 'rlif', icon = 'BTNRingGreen', per = 1.2, flat = true,
             desc = '+{v} health per second', apply = function(s, x) s.regen = s.regen + x end},
-        {key = 'fortitude', name = 'Fortitude', code = 'rde1', icon = 'BTNRingJadeFalcon', per = 2, flat = true,
-            desc = '+{v} armor', apply = function(s, x) s.armor = s.armor + x end},
-        {key = 'precision', name = 'Precision', code = 'hcun', icon = 'BTNHoodOfCunning', per = 0.05,
+        {key = 'precision', name = 'Precision', code = 'AOcr', icon = 'BTNCriticalStrike', per = 0.05,
             desc = '+{v}\037 critical strike chance', apply = function(s, x) s.crit = s.crit + x end},
-        {key = 'brutality', name = 'Brutality', code = 'rst1', icon = 'BTNGauntletsOfOgrePower', per = 0.25,
+        {key = 'brutality', name = 'Brutality', code = 'ratc', icon = 'BTNClawsOfAttack', per = 0.25,
             desc = '+{v}\037 critical strike damage', apply = function(s, x) s.critMult = s.critMult + x end},
         {key = 'vampirism', name = 'Vampirism', code = 'vamp', icon = 'BTNVampiricPotion', per = 0.02,
             desc = 'Heal for {v}\037 of damage dealt', apply = function(s, x) s.lifesteal = s.lifesteal + x end},
@@ -1291,7 +1339,7 @@ do
             apply = function(s, x) s.gold = s.gold + x end},
         {key = 'magnetism', name = 'Magnetism', code = 'mcou', icon = 'BTNMedalionOfCourage', per = 0.15, max = 5, desc = '+{v}\037 pickup range',
             apply = function(s, x) s.pickup = s.pickup + x end},
-        {key = 'precision', name = 'Precision', code = 'hcun', icon = 'BTNHoodOfCunning', per = 0.02, max = 5, desc = '+{v}\037 critical strike',
+        {key = 'precision', name = 'Precision', code = 'AOcr', icon = 'BTNCriticalStrike', per = 0.02, max = 5, desc = '+{v}\037 critical strike',
             apply = function(s, x) s.crit = s.crit + x end},
         {key = 'regeneration', name = 'Regeneration', code = 'rlif', icon = 'BTNRingGreen', per = 0.3, flat = true, max = 5, desc = '+{v} health per second',
             apply = function(s, x) s.regen = s.regen + x end},
@@ -1494,6 +1542,23 @@ do
         return FACTIONS[1], 1
     end
 
+    -- Level 1 health before any bonus: Stamina starts at Warcraft III Strength.
+    function U.heroHealth(hero)
+        return math.floor(CFG.HP_BASE + CFG.HP_PER_STAMINA * hero.attr.str)
+    end
+
+    -- "Int 19  Str 14  Agi 17": the primary attribute first, in gold.
+    local ATTR_SHORT = {str = 'Str', agi = 'Agi', int = 'Int'}
+    function U.heroAttributes(hero)
+        local parts = {U.col(GOLD, ATTR_SHORT[hero.primary] .. ' ' .. hero.attr[hero.primary])}
+        for _, key in ipairs({'str', 'agi', 'int'}) do
+            if key ~= hero.primary then
+                parts[#parts + 1] = ATTR_SHORT[key] .. ' ' .. hero.attr[key]
+            end
+        end
+        return table.concat(parts, '  ')
+    end
+
     ---------------------------------------------------------------------------
     -- File IO (single player). Writes a Preload file that, when read back with
     -- Preloader, stores its payload in an ability tooltip.
@@ -1559,7 +1624,7 @@ do
             keys[#keys + 1] = key
         end
         table.sort(keys)
-        local parts = {'WS1'}
+        local parts = {CFG.SAVE_VERSION}
         for _, key in ipairs(keys) do
             local value = p[key]
             if type(value) == 'table' then
@@ -1578,7 +1643,7 @@ do
 
     function Profile.decode(s)
         local p = Profile.new()
-        if type(s) ~= 'string' or s:sub(1, 3) ~= 'WS1' then
+        if type(s) ~= 'string' or s:sub(1, #CFG.SAVE_VERSION) ~= CFG.SAVE_VERSION then
             return p
         end
         for key, value in s:gmatch('([\037w_]+)=([^;]*)') do
@@ -2283,8 +2348,11 @@ do
     ---------------------------------------------------------------------------
     -- Stats
     ---------------------------------------------------------------------------
+    -- str, agi, int and sta start as bonuses only: G.recomputeStats adds the
+    -- hero's own attributes for its level once every bonus is in.
     function G.baseStats()
-        return {damage = 0, attackSpeed = 0, cdr = 0, area = 0, move = 0, maxHp = 0, regen = 0, armor = 0,
+        return {str = 0, agi = 0, int = 0, sta = 0,
+            damage = 0, attackSpeed = 0, cdr = 0, area = 0, move = 0, maxHp = 0, regen = 0, armor = 0,
             crit = 0.05, critMult = 1.75, lifesteal = 0, pickup = 0, xp = 0, gold = 0, luck = 0, dodge = 0,
             thorns = 0, multishot = 0, duration = 0, dr = 0, cleave = 0, bash = 0, bashDamage = 0,
             attackSlow = 0, attackBonus = 0, killHeal = 0, killGold = 0, explode = 0, lives = 0, range = 0}
@@ -2292,12 +2360,14 @@ do
 
     function G.spellValues(def, rank, power, s)
         local r = rank - 1
-        local dmgMult = (1 + 0.35 * r) * power * (1 + s.damage)
+        -- Spell power is nil while G.recomputeStats is still adding bonuses.
+        local spellPower = s.spellPower or 1
+        local dmgMult = (1 + 0.35 * r) * power * (1 + s.damage) * spellPower
         local v = {rank = rank}
         v.dmg = (def.dmg or 0) * dmgMult
         v.dot = (def.dot or 0) * dmgMult
         v.impact = (def.impactDamage or 0) * dmgMult
-        v.heal = (def.heal or 0) * (1 + 0.3 * r) * power
+        v.heal = (def.heal or 0) * (1 + 0.3 * r) * power * spellPower
         v.radius = (def.radius or 0) * (1 + 0.06 * r) * (1 + s.area)
         v.range = def.range or 900
         v.count = (def.count or 1) + math.floor(r / (def.countEvery or 99))
@@ -2352,6 +2422,16 @@ do
         return b.flat and x or x * 100
     end
 
+    -- What one more pick of a stat card adds (current: the run's picks of it
+    -- so far, or nil): attributes in whole points, every other card a little
+    -- less for each pick already taken.
+    function G.blessingGain(b, current, bonus)
+        if b.attribute then
+            return math.floor(b.per * (1 + bonus) + 0.5)
+        end
+        return b.per * (1 + bonus) * CFG.STACK_FALLOFF ^ (current and current.rank or 0)
+    end
+
     function G.describeBlessing(b, x)
         return (b.desc:gsub('{v}', U.col('ffffff', U.num(G.blessingValue(b, x)))))
     end
@@ -2377,13 +2457,28 @@ do
                 buff.def.apply(s, buff.v)
             end
         end
+        -- Warcraft III attributes: the hero's own, grown by its level, on top
+        -- of every bonus. Stamina takes Strength's numbers (and its health),
+        -- so level 1 health is Warcraft III's.
+        local def, grown = R.def, R.level - 1
+        for _, key in ipairs({'str', 'agi', 'int'}) do
+            s[key] = s[key] + def.attr[key] + def.gain[key] * grown
+        end
+        s.sta = s.sta + def.attr.str + def.gain.str * grown
+        s.primary = s[def.primary]
+        s.regen = s.regen + CFG.REGEN_PER_STRENGTH * s.str
+        s.attackSpeed = s.attackSpeed + CFG.ATTACK_SPEED_PER_AGILITY * s.agi
+        s.armor = s.armor + (def.armor or 0) + CFG.ARMOR_PER_AGILITY * s.agi
+        local k = CFG.SPELL_POWER_PER_POINT
+        s.spellPower = (1 + k * s.primary) / (1 + k * def.attr[def.primary])
+        s.attackDamage = (def.damage + s.primary + s.attackBonus) * (1 + s.damage)
         s.cdr = math.min(s.cdr, 0.6)
         s.dodge = math.min(s.dodge, 0.6)
         s.dr = math.min(s.dr, 0.7)
         R.stats = s
 
         local hero = R.hero
-        local maxHp = math.floor(R.def.hp + s.maxHp)
+        local maxHp = math.floor(CFG.HP_BASE + CFG.HP_PER_STAMINA * s.sta + s.maxHp)
         local oldMax = BlzGetUnitMaxHP(hero)
         if maxHp ~= oldMax then
             local life = GetWidgetLife(hero)
@@ -3724,12 +3819,18 @@ do
 
     function G.gainXp(amount)
         R.xp = R.xp + amount * (1 + R.stats.xp)
+        local leveled = false
         while R.xp >= R.xpNext do
             R.xp = R.xp - R.xpNext
             R.level = R.level + 1
             R.xpNext = G.xpFor(R.level)
             R.pendingLevels = R.pendingLevels + 1
+            leveled = true
             DestroyEffect(AddSpecialEffectTarget(FX.levelUp, R.hero, 'origin'))
+        end
+        -- Every level grows the hero's attributes, as in Warcraft III.
+        if leveled then
+            G.recomputeStats()
         end
         G.tryOpenHand()
     end
@@ -3967,7 +4068,7 @@ do
         local id = GetUnitTypeId(R.hero)
         local hp = BlzGetUnitMaxHP(R.hero)
         local s = R.stats
-        local damage = (R.def.damage + s.attackBonus) * (1 + s.damage) * 0.4
+        local damage = s.attackDamage * 0.4
         local spin = GetRandomReal(0, TWO_PI)
         for k = 1, count - alive do
             local angle = spin + TWO_PI * k / (count - alive)
@@ -4213,7 +4314,7 @@ do
                 -- life is only a safety net.
                 UnitApplyTimedLife(u, FourCC('BTLF'), def.split and v.dur + 2 or v.dur)
                 BlzSetUnitBaseDamage(u, math.max(1, math.floor(v.dmg)), 0)
-                local hp = math.floor(def.hp * (1 + 0.25 * (inst.rank - 1)))
+                local hp = math.floor(def.hp * (1 + 0.25 * (inst.rank - 1)) * R.stats.spellPower)
                 BlzSetUnitMaxHP(u, hp)
                 SetWidgetLife(u, hp)
                 if def.birth then
@@ -4751,7 +4852,7 @@ do
             return
         end
         R.attackClock = R.attackCooldown / (1 + s.attackSpeed)
-        local damage = (R.def.damage + s.attackBonus) * (1 + s.damage)
+        local damage = s.attackDamage
         for _, t in ipairs(targets) do
             if ranged then
                 G.launch({model = R.missile, x = R.hx, y = R.hy, target = t.u, tx = t.x, ty = t.y, speed = R.missileSpeed,
@@ -5257,15 +5358,34 @@ do
 
     -- Character stats panel rows: label, icon (the blessing card that raises
     -- the stat, else an ability), and the value as shown. base is the value
-    -- every hero starts with: anything better shows in green.
+    -- the hero starts with (a number, or a function of the hero): anything
+    -- better shows in green. attr marks the three attributes: the hero's
+    -- primary one has a gold label.
     local function statPct(x)
         return U.num(x * 100) .. '\037'
     end
     local function statBonus(x)
         return (x >= 0 and '+' or '') .. statPct(x)
     end
+    local function statWhole(x)
+        return tostring(math.floor(x + 0.0001))
+    end
     local STAT_ROWS = {
-        {label = 'Damage', bless = 'might', get = function(s) return s.damage, statBonus(s.damage) end},
+        {label = 'Strength', bless = 'strength', attr = 'str', base = function(h) return h.attr.str end,
+            get = function(s) return s.str, statWhole(s.str) end},
+        {label = 'Agility', bless = 'agility', attr = 'agi', base = function(h) return h.attr.agi end,
+            get = function(s) return s.agi, statWhole(s.agi) end},
+        {label = 'Intellect', bless = 'intellect', attr = 'int', base = function(h) return h.attr.int end,
+            get = function(s) return s.int, statWhole(s.int) end},
+        {label = 'Stamina', bless = 'stamina', base = function(h) return h.attr.str end,
+            get = function(s) return s.sta, statWhole(s.sta) end},
+        {label = 'Armor', bless = 'armor', base = function(h) return (h.armor or 0) + CFG.ARMOR_PER_AGILITY * h.attr.agi end,
+            get = function(s) return s.armor, U.num(s.armor) end},
+        {label = 'Attack damage', code = 'AOae', icon = 'BTNCommand', base = function(h) return h.damage + h.attr[h.primary] end,
+            get = function(s) return s.attackDamage, statWhole(s.attackDamage) end},
+        {label = 'Spell power', code = 'AHab', icon = 'BTNBrilliance',
+            get = function(s) return s.spellPower - 1, statBonus(s.spellPower - 1) end},
+        {label = 'Damage bonus', code = 'AEar', icon = 'BTNTrueShot', get = function(s) return s.damage, statBonus(s.damage) end},
         {label = 'Attack speed', bless = 'ferocity', get = function(s) return s.attackSpeed, statBonus(s.attackSpeed) end},
         {label = 'Critical chance', bless = 'precision', base = 0.05, get = function(s) return s.crit, statPct(s.crit) end},
         {label = 'Critical damage', bless = 'brutality', base = 1.75, get = function(s) return s.critMult, statPct(s.critMult) end},
@@ -5273,7 +5393,6 @@ do
         {label = 'Area', bless = 'reach', get = function(s) return s.area, statBonus(s.area) end},
         {label = 'Spell duration', bless = 'persistence', get = function(s) return s.duration, statBonus(s.duration) end},
         {label = 'Projectiles', bless = 'multishot', get = function(s) return s.multishot, '+' .. s.multishot end},
-        {label = 'Armor', bless = 'fortitude', get = function(s) return s.armor, U.num(s.armor) end},
         {label = 'Dodge', code = 'AEev', icon = 'BTNEvasion', get = function(s) return s.dodge, statPct(s.dodge) end},
         {label = 'Damage reduction', code = 'AHad', icon = 'BTNDevotion', get = function(s) return s.dr, statPct(s.dr) end},
         {label = 'Regeneration', bless = 'regeneration', get = function(s) return s.regen, U.num(s.regen) .. ' /s' end},
@@ -5348,13 +5467,14 @@ do
         x, top = tl(0.01, -0.12)
         Hud.statsTitle = UI.text(Hud.statsRoot, '', x, top, 0.136 * k, 0.014 * k, 0.0082 * k)
         Hud.statRows = {}
+        Hud.statLabels = {}
         for i, row in ipairs(STAT_ROWS) do
             local rowTop = -0.137 - (i - 1) * 0.0118
             local b = row.bless and BLESSING_BY_KEY[row.bless]
             x, top = tl(0.01, rowTop + 0.0005)
             UI.image(Hud.statsRoot, b and U.icon(b.code, b.icon) or U.icon(row.code, row.icon), x, top, 0.0098 * k, 0.0098 * k)
             x, top = tl(0.024, rowTop)
-            UI.text(Hud.statsRoot, U.col('bfb6a8', row.label), x, top, 0.09 * k, rowH, 0.0072 * k)
+            Hud.statLabels[i] = UI.text(Hud.statsRoot, U.col('bfb6a8', row.label), x, top, 0.09 * k, rowH, 0.0072 * k)
             x, top = tl(0.104, rowTop)
             Hud.statRows[i] = UI.text(Hud.statsRoot, '', x, top, 0.042 * k, rowH, 0.0072 * k, TEXT_JUSTIFY_RIGHT)
         end
@@ -5573,10 +5693,16 @@ do
         end
         for i, row in ipairs(STAT_ROWS) do
             local value, text = row.get(R.stats)
-            text = U.col(value > (row.base or 0) + 0.0001 and GREEN or 'd8cfc0', text)
+            local base = type(row.base) == 'function' and row.base(R.def) or row.base or 0
+            text = U.col(value > base + 0.0001 and GREEN or 'd8cfc0', text)
             if texts[i] ~= text then
                 texts[i] = text
                 BlzFrameSetText(Hud.statRows[i], text)
+            end
+            local label = U.col(row.attr and row.attr == R.def.primary and GOLD or 'bfb6a8', row.label)
+            if texts['label' .. i] ~= label then
+                texts['label' .. i] = label
+                BlzFrameSetText(Hud.statLabels[i], label)
             end
         end
     end
@@ -6065,7 +6191,7 @@ do
         elseif c.type == 'blessing' then
             local def = BLESSING_BY_KEY[c.key]
             local current = R.blessings[c.key]
-            local amount = def.per * (1 + rarity.bonus)
+            local amount = G.blessingGain(def, current, rarity.bonus)
             icon = U.icon(def.code, def.icon)
             name = def.name
             sub = 'Blessing'
@@ -6150,8 +6276,9 @@ do
                 R.blessings[c.key] = b
                 R.blessingOrder[#R.blessingOrder + 1] = c.key
             end
+            local gain = G.blessingGain(BLESSING_BY_KEY[c.key], b, bonus)
             b.rank = b.rank + 1
-            b.value = b.value + BLESSING_BY_KEY[c.key].per * (1 + bonus)
+            b.value = b.value + gain
         elseif c.type == 'gold' then
             G.addGold(25)
         elseif c.type == 'heal' then
@@ -7113,7 +7240,9 @@ do
         C.heroRole = UI.text(page, '', ix, T - 0.264, iw, 0.018, 0.0078, TEXT_JUSTIFY_RIGHT)
         C.blurb = UI.text(page, '', ix, T - 0.284, iw, 0.03, 0.0078, TEXT_JUSTIFY_LEFT, TEXT_JUSTIFY_TOP)
         C.stats = {}
-        local labels = {'HEALTH', 'ATTACK', 'STARTS WITH'}
+        -- The starting spell shows in the middle panel, so this row has room
+        -- for the attributes.
+        local labels = {'HEALTH', 'ATTACK', 'ATTRIBUTES'}
         local shares = {0.27, 0.27, 0.46}
         local sx = ix
         local sgap = 0.006
@@ -7480,9 +7609,9 @@ do
         BlzFrameSetText(C.blurb, U.col('d8cfc0', hero.blurb))
         local startKey = G.startSpell(hero)
         local start = SPELLS[startKey]
-        BlzFrameSetText(C.stats[1], tostring(hero.hp))
-        BlzFrameSetText(C.stats[2], tostring(hero.damage))
-        BlzFrameSetText(C.stats[3], start.name)
+        BlzFrameSetText(C.stats[1], tostring(U.heroHealth(hero)))
+        BlzFrameSetText(C.stats[2], tostring(hero.damage + hero.attr[hero.primary]))
+        BlzFrameSetText(C.stats[3], U.heroAttributes(hero))
         for i, o in ipairs(C.pool) do
             local key = hero.pool[i]
             if key and SPELLS[key] then
