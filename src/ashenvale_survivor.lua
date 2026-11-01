@@ -1234,52 +1234,122 @@ do
     ---------------------------------------------------------------------------
     local INVENTORY_SIZE = 6
 
-    -- What an item gives, per item level 100 (higher levels scale it up).
+    -- What an item stat gives at item level 100 and weight 1 (higher levels
+    -- scale it up). Attributes come in whole points.
     local ITEM_STATS = {
+        all = {per = 2, flat = true, whole = true, desc = '+{v} all attributes',
+            apply = function(s, x) s.str = s.str + x; s.agi = s.agi + x; s.int = s.int + x end},
+        str = {per = 3, flat = true, whole = true, desc = '+{v} Strength', apply = function(s, x) s.str = s.str + x end},
+        agi = {per = 3, flat = true, whole = true, desc = '+{v} Agility', apply = function(s, x) s.agi = s.agi + x end},
+        int = {per = 3, flat = true, whole = true, desc = '+{v} Intellect', apply = function(s, x) s.int = s.int + x end},
+        sta = {per = 2, flat = true, whole = true, desc = '+{v} Stamina', apply = function(s, x) s.sta = s.sta + x end},
         damage = {per = 0.05, desc = '+{v}\037 damage', apply = function(s, x) s.damage = s.damage + x end},
         armor = {per = 1.5, flat = true, desc = '+{v} armor', apply = function(s, x) s.armor = s.armor + x end},
         move = {per = 0.03, desc = '+{v}\037 movement speed', apply = function(s, x) s.move = s.move + x end},
-        health = {per = 25, flat = true, desc = '+{v} maximum health', apply = function(s, x) s.maxHp = s.maxHp + x end},
+        dodge = {per = 0.03, desc = '+{v}\037 dodge', apply = function(s, x) s.dodge = s.dodge + x end},
         regen = {per = 0.5, flat = true, desc = '+{v} health per second', apply = function(s, x) s.regen = s.regen + x end},
         attackSpeed = {per = 0.04, desc = '+{v}\037 attack speed', apply = function(s, x) s.attackSpeed = s.attackSpeed + x end},
         crit = {per = 0.02, desc = '+{v}\037 critical strike chance', apply = function(s, x) s.crit = s.crit + x end},
-        cdr = {per = 0.025, desc = 'Spells recharge {v}\037 faster', apply = function(s, x) s.cdr = s.cdr + x end},
+        cdr = {per = 0.025, desc = '+{v}\037 spell haste', apply = function(s, x) s.cdr = s.cdr + x end},
         manaRegen = {per = 0.6, flat = true, desc = '+{v} mana per second', apply = function(s, x) s.manaRegen = s.manaRegen + x end},
         pickup = {per = 0.1, desc = '+{v}\037 pickup range', apply = function(s, x) s.pickup = s.pickup + x end},
         xp = {per = 0.05, desc = '+{v}\037 experience', apply = function(s, x) s.xp = s.xp + x end},
         area = {per = 0.03, desc = '+{v}\037 area of effect', apply = function(s, x) s.area = s.area + x end},
-        lifesteal = {per = 0.01, desc = 'Heal for {v}\037 of damage dealt', apply = function(s, x) s.lifesteal = s.lifesteal + x end},
+        lifesteal = {per = 0.01, desc = '+{v}\037 life steal', apply = function(s, x) s.lifesteal = s.lifesteal + x end},
         dr = {per = 0.02, desc = '+{v}\037 damage reduction', apply = function(s, x) s.dr = s.dr + x end},
         gold = {per = 0.08, desc = '+{v}\037 gold', apply = function(s, x) s.gold = s.gold + x end}
     }
+    -- Tooltip order, attributes first.
+    local ITEM_STAT_ORDER = {'all', 'str', 'agi', 'int', 'sta', 'armor', 'damage', 'attackSpeed', 'crit', 'dodge', 'dr',
+        'regen', 'lifesteal', 'manaRegen', 'cdr', 'area', 'move', 'pickup', 'xp', 'gold'}
+
+    -- Signature effects ("Equip:" lines), at item level 100; higher levels
+    -- scale them up to max. One without per does not scale. name is shown in
+    -- the armory and on the damage meter.
+    local ITEM_EFFECTS = {
+        frostOrb = {name = 'Frost Orb', per = 0.2, max = 0.5, desc = 'Attacks slow the target by {v}\037 for 2 seconds.',
+            apply = function(s, x) s.attackSlow = math.max(s.attackSlow, x) end},
+        fireOrb = {name = 'Fire Orb', per = 0.2, max = 1, desc = 'Attacks burst into flames: {v}\037 of their damage around the target.',
+            apply = function(s, x) s.fireSplash = s.fireSplash + x end},
+        darkOrb = {name = 'Dark Minion', per = 0.03, max = 0.12, desc = 'Kills have a {v}\037 chance to raise a skeleton for 20 seconds.',
+            apply = function(s, x) s.darkMinion = s.darkMinion + x end},
+        corruptOrb = {name = 'Corruption', per = 0.06, max = 0.3, desc = 'Attacks corrupt the target: it takes {v}\037 more damage for 3 seconds.',
+            apply = function(s, x) s.corrupt = s.corrupt + x end},
+        vampiric = {name = 'Vampiric Attack', per = 0.08, max = 0.35, desc = 'Attacks heal you for {v}\037 of their damage.',
+            apply = function(s, x) s.vampiric = s.vampiric + x end},
+        ankh = {name = 'Reincarnation', desc = 'Return to life once per run with half health.',
+            apply = function(s) s.lives = s.lives + 1 end},
+        escape = {name = 'Escape', desc = 'A hit that would drop you under 30\037 health misses and you blink away. Every 30 seconds.',
+            apply = function(s) s.escape = 1 end},
+        sanctuary = {name = 'Sanctuary', per = 0.15, max = 0.6, desc = 'Under 30\037 health, heal {v}\037 of your maximum health. Every 60 seconds.',
+            apply = function(s, x) s.sanctuary = s.sanctuary + x end},
+        cloak = {name = 'Immolation', per = 0.25, max = 1.5, desc = 'Burns enemies near you for {v}\037 of your attack damage every second.',
+            apply = function(s, x) s.flames = s.flames + x end},
+        drums = {name = 'War Drums', per = 0.15, max = 0.75, desc = 'Your summons deal {v}\037 more damage.',
+            apply = function(s, x) s.summonDamage = s.summonDamage + x end},
+        mastery = {name = 'Spell Mastery', per = 0.08, max = 0.5, desc = 'Spells cost {v}\037 less mana.',
+            apply = function(s, x) s.manaCost = s.manaCost + x end},
+        thirst = {name = 'Battle Thirst', per = 0.12, max = 0.8, desc = 'Kills raise your attack speed by {v}\037 for 3 seconds.',
+            apply = function(s, x) s.thirst = s.thirst + x end},
+        souls = {name = 'Soul Harvest', per = 4, flat = true, whole = true, desc = 'Every 25 kills give 1 Intellect for the rest of the run, up to {v}.',
+            apply = function(s, x) s.souls = s.souls + x end},
+        immunity = {name = 'Spell Immunity', desc = 'Ignores one heavy hit (a tenth of your health or more) every 15 seconds.',
+            apply = function(s) s.spellWard = 1 end},
+        frostguard = {name = 'Frost Armor', per = 0.15, max = 0.6, desc = 'Enemies that hit you are slowed by {v}\037 for 3 seconds.',
+            apply = function(s, x) s.frostguard = math.max(s.frostguard, x) end},
+        searing = {name = 'Searing', per = 0.2, max = 1.5, desc = 'Attacks burn the target for {v}\037 of their damage over 3 seconds.',
+            apply = function(s, x) s.searing = s.searing + x end},
+        spikes = {name = 'Spiked Shield', per = 12, flat = true, desc = 'Enemies that hit you take {v} damage.',
+            apply = function(s, x) s.thorns = s.thorns + x end},
+        purge = {name = 'Purge', per = 0.04, max = 0.25, desc = 'Attacks have a {v}\037 chance to stun the target for 1 second.',
+            apply = function(s, x) s.bash = s.bash + x end}
+    }
 
     -- Per zone, the items of its four bosses and its final boss, in order:
-    -- rawcode (its icon comes from the game data), name, stat.
+    -- rawcode (its icon comes from the game data), name, stats (weight 1 is
+    -- a full share, after Warcraft III's own item) and an effect.
     local ZONE_ITEMS = {
-        {{'ratc', 'Claws of Attack', 'damage'}, {'rde1', 'Ring of Protection', 'armor'}, {'bspd', 'Boots of Speed', 'move'},
-            {'prvt', 'Periapt of Vitality', 'health'}, {'rlif', 'Ring of Regeneration', 'regen'}},
-        {{'gcel', 'Gloves of Haste', 'attackSpeed'}, {'hcun', 'Hood of Cunning', 'crit'}, {'rwiz', 'Sobi Mask', 'manaRegen'},
-            {'mcou', 'Medallion of Courage', 'pickup'}, {'cnob', 'Circlet of Nobility', 'xp'}},
-        {{'clfm', 'Cloak of Flames', 'area'}, {'modt', 'Mask of Death', 'lifesteal'}, {'brac', 'Runed Bracers', 'dr'},
-            {'bgst', 'Belt of Giant Strength', 'health'}, {'lgdh', 'Legion Doom-Horn', 'move'}},
-        {{'ciri', 'Robe of the Magi', 'cdr'}, {'ofro', 'Orb of Frost', 'damage'}, {'ward', 'Warsong Battle Drums', 'attackSpeed'},
-            {'ajen', 'Ancient Janggo of Endurance', 'regen'}, {'evtl', 'Talisman of Evasion', 'dr'}},
-        {{'ofir', 'Orb of Fire', 'area'}, {'odef', 'Orb of Darkness', 'damage'}, {'kpin', 'Khadgar\'s Pipe of Insight', 'manaRegen'},
-            {'hval', 'Helm of Valor', 'armor'}, {'rhth', 'Khadgar\'s Gem of Health', 'health'}},
-        {{'frgd', 'Frostguard', 'armor'}, {'ckng', 'Crown of Kings', 'damage'}, {'desc', 'Kelen\'s Dagger of Escape', 'move'},
-            {'ssan', 'Staff of Sanctuary', 'regen'}, {'ankh', 'Ankh of Reincarnation', 'gold'}},
-        {{'lnrn', 'Lion\'s Ring', 'crit'}, {'schl', 'Scepter of Healing', 'regen'}, {'shhn', 'Shield of Honor', 'armor'},
-            {'horl', 'Sacred Relic', 'xp'}, {'lhst', 'The Lion Horn of Stormwind', 'dr'}},
-        {{'shcw', 'Shaman Claws', 'damage'}, {'shtm', 'Shamanic Totem', 'regen'}, {'vddl', 'Voodoo Doll', 'lifesteal'},
-            {'rots', 'Scepter of the Sea', 'area'}, {'axas', 'Ancestral Staff', 'cdr'}},
-        {{'fwss', 'Frost Wyrm Skull Shield', 'armor'}, {'stwa', 'Sturdy War Axe', 'damage'}, {'klmm', 'Killmaim', 'crit'},
-            {'srtl', 'Serathil', 'attackSpeed'}, {'dtsb', 'Drek\'Thar\'s Spellbook', 'cdr'}},
-        {{'crys', 'Crystal Ball', 'pickup'}, {'arsh', 'Arcanite Shield', 'armor'}, {'mnsf', 'Mindstaff', 'area'},
-            {'ram4', 'Ring of the Archmagi', 'xp'}, {'gvsm', 'Gloves of Spell Mastery', 'cdr'}},
-        {{'srbd', 'Searing Blade', 'damage'}, {'frhg', 'Firehand Gauntlets', 'attackSpeed'}, {'hbth', 'Helm of Battlethirst', 'health'},
-            {'shdt', 'Shield of the Deathlord', 'dr'}, {'gldo', 'Orb of Kil\'jaeden', 'area'}},
-        {{'sksh', 'Skull Shield', 'armor'}, {'grsl', 'Grimoire of Souls', 'lifesteal'}, {'nspi', 'Necklace of Spell Immunity', 'dr'},
-            {'ocor', 'Orb of Corruption', 'damage'}, {'crdt', 'Crown of the Deathlord', 'gold'}}
+        {{'ratc', 'Claws of Attack', {damage = 1, str = 0.5}}, {'rde1', 'Ring of Protection', {armor = 1, sta = 0.5}},
+            {'bspd', 'Boots of Speed', {move = 1, agi = 0.5}}, {'prvt', 'Periapt of Vitality', {sta = 1.5, regen = 0.5}},
+            {'rlif', 'Ring of Regeneration', {regen = 1, str = 0.5}}},
+        {{'gcel', 'Gloves of Haste', {attackSpeed = 1, agi = 0.5}}, {'hcun', 'Hood of Cunning', {agi = 1, int = 1}},
+            {'rwiz', 'Sobi Mask', {manaRegen = 1, int = 0.5}}, {'mcou', 'Medallion of Courage', {str = 1, int = 1}},
+            {'cnob', 'Circlet of Nobility', {all = 1, xp = 0.5}}},
+        {{'clfm', 'Cloak of Flames', {sta = 1, armor = 0.5}, 'cloak'}, {'modt', 'Mask of Death', {str = 0.5, sta = 0.5}, 'vampiric'},
+            {'brac', 'Runed Bracers', {dr = 1, sta = 0.5, int = 0.5}}, {'bgst', 'Belt of Giant Strength', {str = 2, sta = 0.5}},
+            {'lgdh', 'Legion Doom-Horn', {move = 1, attackSpeed = 0.5, str = 0.5}}},
+        {{'ciri', 'Robe of the Magi', {int = 2, manaRegen = 0.5}}, {'ofro', 'Orb of Frost', {damage = 0.5, int = 0.5}, 'frostOrb'},
+            {'ward', 'Warsong Battle Drums', {damage = 0.5, str = 0.5}, 'drums'},
+            {'ajen', 'Ancient Janggo of Endurance', {attackSpeed = 1, move = 0.5, sta = 0.5}},
+            {'evtl', 'Talisman of Evasion', {dodge = 1, agi = 0.5}}},
+        {{'ofir', 'Orb of Fire', {damage = 0.5, str = 0.5}, 'fireOrb'}, {'odef', 'Orb of Darkness', {damage = 0.5, int = 0.5}, 'darkOrb'},
+            {'kpin', 'Khadgar\'s Pipe of Insight', {manaRegen = 1.5, int = 0.5}}, {'hval', 'Helm of Valor', {str = 1, agi = 1, armor = 0.5}},
+            {'rhth', 'Khadgar\'s Gem of Health', {sta = 2, regen = 0.5}}},
+        {{'frgd', 'Frostguard', {armor = 1, str = 0.5}, 'frostguard'}, {'ckng', 'Crown of Kings', {all = 2.5}},
+            {'desc', 'Kelen\'s Dagger of Escape', {agi = 1, move = 0.5}, 'escape'},
+            {'ssan', 'Staff of Sanctuary', {int = 1, regen = 0.5}, 'sanctuary'},
+            {'ankh', 'Ankh of Reincarnation', {sta = 1, regen = 0.5}, 'ankh'}},
+        {{'lnrn', 'Lion\'s Ring', {crit = 1, str = 0.5, armor = 0.5}}, {'schl', 'Scepter of Healing', {regen = 1.5, int = 0.5}},
+            {'shhn', 'Shield of Honor', {armor = 1, sta = 0.5, damage = 0.5}}, {'horl', 'Sacred Relic', {xp = 1, all = 0.5}},
+            {'lhst', 'The Lion Horn of Stormwind', {armor = 1, dr = 0.5, sta = 0.5}}},
+        {{'shcw', 'Shaman Claws', {damage = 1, agi = 0.5}, 'purge'}, {'shtm', 'Shamanic Totem', {int = 1, regen = 0.5, manaRegen = 0.5}},
+            {'vddl', 'Voodoo Doll', {lifesteal = 1, int = 0.5}}, {'rots', 'Scepter of the Sea', {area = 1, int = 0.5}},
+            {'axas', 'Ancestral Staff', {cdr = 1, int = 0.5, sta = 0.5}}},
+        {{'fwss', 'Frost Wyrm Skull Shield', {armor = 1, dr = 0.5, sta = 0.5}}, {'stwa', 'Sturdy War Axe', {damage = 1, str = 1}},
+            {'klmm', 'Killmaim', {crit = 1, str = 0.5}, 'vampiric'}, {'srtl', 'Serathil', {attackSpeed = 1, agi = 1}},
+            {'dtsb', 'Drek\'Thar\'s Spellbook', {cdr = 1, int = 1}}},
+        {{'crys', 'Crystal Ball', {pickup = 1, int = 0.5, xp = 0.5}}, {'arsh', 'Arcanite Shield', {armor = 1.5, sta = 0.5}},
+            {'mnsf', 'Mindstaff', {int = 1, manaRegen = 0.5, area = 0.5}}, {'ram4', 'Ring of the Archmagi', {all = 1, manaRegen = 0.5}},
+            {'gvsm', 'Gloves of Spell Mastery', {cdr = 0.5, int = 0.5}, 'mastery'}},
+        {{'srbd', 'Searing Blade', {damage = 1, str = 0.5}, 'searing'},
+            {'frhg', 'Firehand Gauntlets', {attackSpeed = 1, agi = 0.5, armor = 0.5}},
+            {'hbth', 'Helm of Battlethirst', {str = 1, sta = 0.5}, 'thirst'},
+            {'shdt', 'Shield of the Deathlord', {armor = 1, dr = 0.5, sta = 1}},
+            {'gldo', 'Orb of Kil\'jaeden', {damage = 0.5, area = 0.5}, 'fireOrb'}},
+        {{'sksh', 'Skull Shield', {armor = 1, sta = 1}, 'spikes'}, {'grsl', 'Grimoire of Souls', {int = 1, lifesteal = 0.5}, 'souls'},
+            {'nspi', 'Necklace of Spell Immunity', {dr = 0.5, int = 0.5}, 'immunity'},
+            {'ocor', 'Orb of Corruption', {damage = 0.5, agi = 0.5}, 'corruptOrb'},
+            {'crdt', 'Crown of the Deathlord', {all = 1.5, gold = 1}}}
     }
     local GEAR_UPGRADES = 6     -- steps on the upgrade track
     local GEAR_STEP_ILVL = 3    -- item levels per step
@@ -1289,8 +1359,14 @@ do
         local bosses = {zone.bosses[1], zone.bosses[2], zone.bosses[3], zone.bosses[4], zone.final}
         for bi, boss in ipairs(bosses) do
             local entry = ZONE_ITEMS[zi][bi]
+            local stats = {}
+            for _, key in ipairs(ITEM_STAT_ORDER) do
+                if entry[3][key] then
+                    stats[#stats + 1] = {key = key, stat = ITEM_STATS[key], w = entry[3][key]}
+                end
+            end
             local item = {id = 'z' .. zi .. 'b' .. bi, index = #GEAR + 1, zone = zi, boss = boss, code = entry[1],
-                name = entry[2], stat = ITEM_STATS[entry[3]], baseIlvl = 100 + 10 * (zone.tier - 1)}
+                name = entry[2], stats = stats, effect = ITEM_EFFECTS[entry[4]], baseIlvl = 100 + 10 * (zone.tier - 1)}
             boss.item = item
             GEAR[#GEAR + 1] = item
         end
@@ -1299,6 +1375,23 @@ do
     -- Stat multiplier for an item level: 100 is the base, every 40 adds 100 percent.
     local function gearScale(ilvl)
         return 1 + (ilvl - 100) / 40
+    end
+
+    -- One stat or effect of an item at an item level (b: an ITEM_STATS or
+    -- ITEM_EFFECTS entry, w: its weight): whole points for attributes, never
+    -- past an effect's cap.
+    local function gearValue(b, w, ilvl)
+        if b.per == nil then
+            return 0
+        end
+        local x = b.per * w * gearScale(ilvl)
+        if b.whole then
+            x = math.floor(x + 0.5)
+        end
+        if b.max then
+            x = math.min(x, b.max)
+        end
+        return x
     end
 
     local function gearLevel(p, item)
@@ -1887,10 +1980,6 @@ do
         return gearLevel(Profile.data, item)
     end
 
-    function Profile.itemValue(item, ilvl)
-        return item.stat.per * gearScale(ilvl)
-    end
-
     -- Account-wide bonuses from talents, worn gear and perks.
     function Profile.applyBonuses(s)
         for _, talent in ipairs(TALENTS) do
@@ -1900,7 +1989,13 @@ do
             end
         end
         for _, item in pairs(gearEquipped(Profile.data)) do
-            item.stat.apply(s, Profile.itemValue(item, Profile.itemLevel(item)))
+            local ilvl = Profile.itemLevel(item)
+            for _, entry in ipairs(item.stats) do
+                entry.stat.apply(s, gearValue(entry.stat, entry.w, ilvl))
+            end
+            if item.effect then
+                item.effect.apply(s, gearValue(item.effect, 1, ilvl))
+            end
         end
         if Profile.perk('secondwind') > 0 then
             s.lives = s.lives + 1
@@ -2483,7 +2578,10 @@ do
             damage = 0, attackSpeed = 0, cdr = 0, area = 0, move = 0, maxHp = 0, regen = 0, armor = 0,
             crit = 0.05, critMult = 1.75, lifesteal = 0, pickup = 0, xp = 0, gold = 0, luck = 0, dodge = 0,
             thorns = 0, multishot = 0, duration = 0, dr = 0, cleave = 0, bash = 0, bashDamage = 0,
-            attackSlow = 0, attackBonus = 0, killHeal = 0, killGold = 0, explode = 0, lives = 0, range = 0}
+            attackSlow = 0, attackBonus = 0, killHeal = 0, killGold = 0, explode = 0, lives = 0, range = 0,
+            -- Item effects (ITEM_EFFECTS).
+            fireSplash = 0, darkMinion = 0, corrupt = 0, vampiric = 0, escape = 0, sanctuary = 0, flames = 0,
+            summonDamage = 0, manaCost = 0, thirst = 0, souls = 0, spellWard = 0, frostguard = 0, searing = 0}
     end
 
     function G.spellValues(def, rank, power, s)
@@ -2504,8 +2602,10 @@ do
         end
         -- 5 percent faster per rank, compounding: never reaches zero.
         v.cd = (def.cd or 1) * 0.95 ^ r * (1 - math.min(0.6, s.cdr))
-        -- Whole mana points (MANA_DATA), a little more with every rank.
-        v.mana = def.mana and math.max(1, math.floor(def.mana * (1 + CFG.MANA_COST_PER_RANK * r) + 0.5)) or 0
+        -- Whole mana points (MANA_DATA), a little more with every rank, less
+        -- with Spell Mastery.
+        v.mana = def.mana and math.max(1, math.floor(def.mana * (1 + CFG.MANA_COST_PER_RANK * r)
+            * (1 - math.min(0.5, s.manaCost or 0)) + 0.5)) or 0
         if def.kind == 'summon' and not def.split then
             -- Out for exactly one cooldown, so they cannot pile up on their own;
             -- spell duration (Persistence) lets the waves overlap. A split
@@ -2566,6 +2666,45 @@ do
         return (b.desc:gsub('{v}', U.col('ffffff', U.num(G.blessingValue(b, x)))))
     end
 
+    -- An item's stats on one line: "+4 Strength, +2 Stamina, +6 percent damage".
+    function G.describeItem(item, ilvl)
+        local parts = {}
+        for _, entry in ipairs(item.stats) do
+            parts[#parts + 1] = G.describeBlessing(entry.stat, gearValue(entry.stat, entry.w, ilvl))
+        end
+        return table.concat(parts, ', ')
+    end
+
+    -- Its effect, if any, as a green Equip line (nil without one).
+    function G.describeItemEffect(item, ilvl)
+        local e = item.effect
+        if e == nil then
+            return nil
+        end
+        local text = e.desc:gsub('{v}', U.num(G.blessingValue(e, gearValue(e, 1, ilvl))))
+        return U.col(GREEN, 'Equip: ' .. text)
+    end
+
+    -- What the next upgrade raises: only what changes (whole attributes and
+    -- capped effects can stay put for a step), or nil.
+    function G.describeItemNext(item, ilvl)
+        local parts = {}
+        for _, entry in ipairs(item.stats) do
+            local x = gearValue(entry.stat, entry.w, ilvl + GEAR_STEP_ILVL)
+            if x ~= gearValue(entry.stat, entry.w, ilvl) then
+                parts[#parts + 1] = G.describeBlessing(entry.stat, x)
+            end
+        end
+        local e = item.effect
+        if e and e.per then
+            local x = gearValue(e, 1, ilvl + GEAR_STEP_ILVL)
+            if x ~= gearValue(e, 1, ilvl) then
+                parts[#parts + 1] = e.name .. ' ' .. U.col('ffffff', U.num(G.blessingValue(e, x)) .. (e.flat and '' or '\037'))
+            end
+        end
+        return #parts > 0 and table.concat(parts, ', ') or nil
+    end
+
     function G.recomputeStats()
         local s = G.baseStats()
         if R.melee then
@@ -2587,6 +2726,8 @@ do
                 buff.def.apply(s, buff.v)
             end
         end
+        -- Intellect harvested by the Grimoire of Souls this run.
+        s.int = s.int + R.souls
         -- Warcraft III attributes: the hero's own, grown by its level, on top
         -- of every bonus. Stamina takes Strength's numbers (and its health),
         -- so level 1 health is Warcraft III's.
@@ -2762,10 +2903,15 @@ do
     -- Damage, crowd control and healing
     ---------------------------------------------------------------------------
     function G.damage(u, amount, source, canCrit)
-        if R.enemies[u] == nil or amount <= 0 then
+        local info = R.enemies[u]
+        if info == nil or amount <= 0 then
             return
         end
         local s = R.stats
+        -- Orb of Corruption: a corrupted target takes more from everything.
+        if info.corruptUntil and R.time < info.corruptUntil then
+            amount = amount * (1 + s.corrupt)
+        end
         local crit = false
         if canCrit ~= false and GetRandomReal(0, 1) < s.crit then
             amount = amount * s.critMult
@@ -3137,12 +3283,45 @@ do
                 return
             end
             amount = amount * (1 - s.dr)
+            local maxHp = BlzGetUnitMaxHP(R.hero)
+            -- Necklace of Spell Immunity: a heavy hit now and then does nothing.
+            if s.spellWard > 0 and amount >= 0.1 * maxHp and R.time >= R.wardReady then
+                R.wardReady = R.time + 15
+                BlzSetEventDamage(0)
+                local shield = AddSpecialEffectTarget(FX.divineShield, R.hero, 'origin')
+                G.after(1.0, function()
+                    DestroyEffect(shield)
+                end)
+                if CFG.DAMAGE_NUMBERS then
+                    G.floatText(R.hx, R.hy, 'Immune', 9, 255, 230, 140)
+                end
+                return
+            end
             if s.thorns > 0 and source and R.enemies[source] then
                 local attacker = source
                 local thorns = s.thorns * (1 + s.damage)
                 G.after(0, function()
                     G.damage(attacker, thorns, 'thorns', false)
                 end)
+            end
+            if s.frostguard > 0 and source and R.enemies[source] then
+                G.slow(source, s.frostguard, 3.0)
+            end
+            -- Kelen's Dagger and the Staff of Sanctuary answer a hit that
+            -- would leave the hero under 30 percent health.
+            local life = GetWidgetLife(R.hero)
+            if life - amount < 0.3 * maxHp then
+                if s.escape > 0 and R.time >= R.escapeReady then
+                    R.escapeReady = R.time + 30
+                    BlzSetEventDamage(0)
+                    G.after(0, G.escape)
+                    return
+                end
+                if s.sanctuary > 0 and R.time >= R.sanctuaryReady then
+                    R.sanctuaryReady = R.time + 60
+                    SetWidgetLife(R.hero, math.min(maxHp, life + maxHp * s.sanctuary))
+                    DestroyEffect(AddSpecialEffectTarget(FX.healingWave, R.hero, 'origin'))
+                end
             end
             if amount >= GetWidgetLife(R.hero) - 1 and R.livesUsed < s.lives then
                 BlzSetEventDamage(0)
@@ -3165,6 +3344,11 @@ do
                 key = 'attack'
             elseif source and R.summons[source] then
                 key = R.summons[source].key
+                -- Warsong Battle Drums.
+                if R.stats.summonDamage > 0 and amount > 0 then
+                    amount = amount * (1 + R.stats.summonDamage)
+                    BlzSetEventDamage(amount)
+                end
             end
         end
         if key and R.enemies[target] then
@@ -3196,6 +3380,63 @@ do
             G.stun(u, 1.5)
         end)
         Hud.banner(U.col(GOLD, 'Second chance!') .. '  You rise again.')
+    end
+
+    -- Kelen's Dagger of Escape: a blink away from the enemies close by, to
+    -- the first walkable spot of eight directions, and a moment of safety.
+    function G.escape()
+        if R == nil or R.ended then
+            return
+        end
+        local ax, ay = 0, 0
+        G.inRange(R.hx, R.hy, 500, function(_, x, y)
+            ax, ay = ax + (R.hx - x), ay + (R.hy - y)
+        end)
+        local angle = (ax == 0 and ay == 0) and GetRandomReal(0, TWO_PI) or Atan2(ay, ax)
+        for k = 0, 7 do
+            local a = angle + (k // 2 + math.fmod(k, 2)) * (math.fmod(k, 2) == 0 and -1 or 1) * TWO_PI / 8
+            local x = U.clamp(R.hx + math.cos(a) * 550, G.minX, G.maxX)
+            local y = U.clamp(R.hy + math.sin(a) * 550, G.minY, G.maxY)
+            if not IsTerrainPathable(x, y, PATHING_TYPE_WALKABILITY) then
+                G.fx(FX.blink, R.hx, R.hy, 1.0)
+                SetUnitX(R.hero, x)
+                SetUnitY(R.hero, y)
+                R.hx, R.hy = x, y
+                R.clickX, R.clickY = nil, nil
+                G.fx(FX.blink, x, y, 1.0)
+                break
+            end
+        end
+        R.invulnUntil = math.max(R.invulnUntil, R.time + 1.5)
+    end
+
+    -- Orb of Darkness: a skeleton rises from a kill and fights for a while.
+    function G.raiseMinion(x, y)
+        local alive = 0
+        for _ in pairs(R.summons) do
+            alive = alive + 1
+        end
+        if alive >= CFG.MAX_SUMMONS then
+            return
+        end
+        local u = CreateUnit(G.PLAYER, FourCC('uske'), x, y, 270)
+        if u == nil then
+            return
+        end
+        UnitApplyTimedLife(u, FourCC('BTLF'), 20)
+        BlzSetUnitBaseDamage(u, math.max(1, math.floor(R.stats.attackDamage * 0.5)), 0)
+        local hp = math.floor(200 * R.stats.spellPower)
+        BlzSetUnitMaxHP(u, hp)
+        SetWidgetLife(u, hp)
+        G.fx(FX.animateDead, x, y, 0.8)
+        if R.paused then
+            PauseUnit(u, true)
+        end
+        R.summons[u] = {key = 'darkOrb'}
+        local target = G.nearest(x, y, 1200, 1)[1]
+        if target then
+            IssuePointOrder(u, 'attack', target.x, target.y)
+        end
     end
 
     ---------------------------------------------------------------------------
@@ -3676,6 +3917,20 @@ do
         if s.killGold > 0 and GetRandomReal(0, 1) < s.killGold then
             G.addGold(1)
         end
+        if s.thirst > 0 then
+            R.thirstUntil = R.time + 3.0
+        end
+        if s.souls > R.souls then
+            R.soulKills = R.soulKills + 1
+            if R.soulKills >= 25 then
+                R.soulKills = 0
+                R.souls = R.souls + 1
+                G.recomputeStats()
+            end
+        end
+        if s.darkMinion > 0 and GetRandomReal(0, 1) < s.darkMinion then
+            G.raiseMinion(x, y)
+        end
         local roll = GetRandomReal(0, 1)
         if roll < 0.002 then
             G.dropPickup('magnet', x, y, 0)
@@ -3760,11 +4015,15 @@ do
                     end
                 end
             end
-            local detail = 'Item level ' .. ilvl .. '  -  ' .. G.describeBlessing(item.stat, Profile.itemValue(item, ilvl))
+            local title = 'Loot: ' .. U.col(gearHex(ilvl), item.name) .. U.col(GREY, '  item level ' .. ilvl)
             if owned then
-                detail = detail .. U.col(GREEN, '  (up from ' .. owned .. ')')
+                title = title .. U.col(GREEN, '  (up from ' .. owned .. ')')
             end
-            Hud.toast(icon, 'Loot: ' .. U.col(gearHex(ilvl), item.name), detail)
+            local detail = G.describeItem(item, ilvl)
+            if item.effect then
+                detail = detail .. ', ' .. U.col(GREEN, item.effect.name)
+            end
+            Hud.toast(icon, title, detail)
             Hud.refreshGear()
         else
             local gold = 10 * ZONES[item.zone].tier
@@ -5018,6 +5277,16 @@ do
     function G.attackHit(u, x, y, damage)
         local s = R.stats
         G.damage(u, damage, 'attack')
+        if s.vampiric > 0 then
+            G.heal(damage * s.vampiric)
+        end
+        local info = R.enemies[u]
+        if info and s.corrupt > 0 then
+            info.corruptUntil = R.time + 3.0
+        end
+        if s.searing > 0 then
+            G.dot(u, damage * s.searing / 3, 3.0, 'searing')
+        end
         if s.bash > 0 and GetRandomReal(0, 1) < s.bash then
             G.stun(u, 1.0)
             G.damage(u, s.bashDamage * (1 + s.damage), 'bash', false)
@@ -5035,6 +5304,14 @@ do
                 G.fx(FX.cleave, x, y, 1.0)
             end
         end
+        if s.fireSplash > 0 then
+            G.fx(FX.immolationHit, x, y, 0.8)
+            G.inRange(x, y, 150 * (1 + s.area), function(other)
+                if other ~= u then
+                    G.damage(other, damage * s.fireSplash, 'fireOrb', false)
+                end
+            end)
+        end
     end
 
     function G.updateAttack(dt)
@@ -5050,7 +5327,9 @@ do
             R.attackClock = 0.1
             return
         end
-        R.attackClock = R.attackCooldown / (1 + s.attackSpeed)
+        -- Battle Thirst: faster for a few seconds after a kill.
+        local thirst = R.time < R.thirstUntil and s.thirst or 0
+        R.attackClock = R.attackCooldown / (1 + s.attackSpeed + thirst)
         local damage = s.attackDamage
         for _, t in ipairs(targets) do
             if ranged then
@@ -5089,6 +5368,23 @@ do
             SetWidgetLife(R.hero, math.min(BlzGetUnitMaxHP(R.hero), life + s.regen * dt))
         end
         G.addMana(s.manaRegen * dt)
+        -- Cloak of Flames: a burn around the hero every second.
+        if s.flames > 0 then
+            R.flamesClock = R.flamesClock - dt
+            if R.flamesClock <= 0 then
+                R.flamesClock = 1.0
+                local shown = 0
+                R.dmgTick = true
+                G.inRange(R.hx, R.hy, 220 * (1 + s.area), function(u, x, y)
+                    G.damage(u, s.attackDamage * s.flames, 'cloak', false)
+                    shown = shown + 1
+                    if shown <= 3 then
+                        G.fx(FX.immolationHit, x, y, 0.7)
+                    end
+                end)
+                R.dmgTick = false
+            end
+        end
         local invulnerable = R.time < R.invulnUntil
         if invulnerable ~= R.invulnerable then
             R.invulnerable = invulnerable
@@ -5263,7 +5559,9 @@ do
             rings = 0, finalAt = nil, nextElite = 75, nextBoss = 1, finalSpawned = false, boss = nil,
             moving = false, anim = '', animLock = 0, spinUntil = 0, images = {},
             attackAnim = def.attackAnim or 'attack', castAnim = def.castAnim, morph = nil,
-            interactables = {}, worldChestsOpened = 0, objectClock = GetRandomReal(58, 78), hitFeedbackAt = 0}
+            interactables = {}, worldChestsOpened = 0, objectClock = GetRandomReal(58, 78), hitFeedbackAt = 0,
+            -- Item effects: when each is ready again, and their counters.
+            thirstUntil = 0, souls = 0, soulKills = 0, wardReady = 0, escapeReady = 0, sanctuaryReady = 0, flamesClock = 1}
 
         G.playMusic(zone.music)
         local f = zone.fog
@@ -5550,6 +5848,9 @@ do
 
 
     local SOURCE_NAMES = {attack = 'Auto Attack', thorns = 'Thorns', revive = 'Second Chance'}
+    for key, effect in pairs(ITEM_EFFECTS) do
+        SOURCE_NAMES[key] = effect.name
+    end
     local function sourceName(key)
         if SOURCE_NAMES[key] then
             return SOURCE_NAMES[key]
@@ -5899,9 +6200,13 @@ do
         end
         local ilvl = Profile.itemLevel(item)
         local at = Hud.invAt
+        local body = G.describeItem(item, ilvl)
+        local effect = G.describeItemEffect(item, ilvl)
+        if effect then
+            body = body .. '\n' .. effect
+        end
         Hud.showTip(at[1] - Hud.tip.w - 0.004, at[2] - Hud.tip.h, gearIcon(item), U.col(gearHex(ilvl), item.name),
-            'Item level ' .. ilvl .. '  -  ' .. ZONES[item.zone].name,
-            G.describeBlessing(item.stat, Profile.itemValue(item, ilvl)))
+            'Item level ' .. ilvl .. '  -  ' .. ZONES[item.zone].name, body)
     end
 
     -- The stats panel's values; a row only gets new text when it changed.
@@ -8117,7 +8422,7 @@ do
             K.slots[slot] = o
         end
         local listX = dx + 0.008 + 2 * slotSize + slotGap + 0.012
-        K.worn = UI.text(page, '', listX, T - 0.272, dx + dw - listX, 3 * slotSize + 2 * slotGap + 0.004, 0.0068,
+        K.worn = UI.text(page, '', listX, T - 0.266, dx + dw - listX, 3 * slotSize + 2 * slotGap + 0.01, 0.0064,
             TEXT_JUSTIFY_LEFT, TEXT_JUSTIFY_TOP)
     end
 
@@ -8137,16 +8442,18 @@ do
             .. U.col(GREY, '\nin ' .. ZONES[item.zone].name .. ' at ' .. U.time(item.boss.t)))
         local lines = {}
         if ilvl then
-            lines[#lines + 1] = U.col(GOLD, 'Item level ' .. ilvl) .. U.col(GREY, '   upgrade ' .. steps .. '/' .. GEAR_UPGRADES)
-            lines[#lines + 1] = G.describeBlessing(item.stat, Profile.itemValue(item, ilvl))
-            if steps < GEAR_UPGRADES then
-                lines[#lines + 1] = U.col(GREY, 'Next: ') .. G.describeBlessing(item.stat,
-                    Profile.itemValue(item, ilvl + GEAR_STEP_ILVL))
+            lines[#lines + 1] = U.col(GOLD, 'Item level ' .. ilvl) .. U.col(GREY, '   upgrade ' .. steps .. '/' .. GEAR_UPGRADES
+                .. '   ') .. (gearSlotOf(p, item) and U.col(GREEN, 'Carried') or U.col(GREY, 'In the armory'))
+            lines[#lines + 1] = G.describeItem(item, ilvl)
+            lines[#lines + 1] = G.describeItemEffect(item, ilvl)
+            local nextText = steps < GEAR_UPGRADES and G.describeItemNext(item, ilvl)
+            if nextText then
+                lines[#lines + 1] = U.col(GREY, 'Next: ') .. nextText
             end
-            lines[#lines + 1] = gearSlotOf(p, item) and U.col(GREEN, 'Carried') or U.col(GREY, 'In the armory')
         else
-            lines[#lines + 1] = U.col(GREY, 'Not looted yet. ') .. G.describeBlessing(item.stat, item.stat.per)
-                .. U.col(GREY, ' at item level 100.')
+            lines[#lines + 1] = U.col(GREY, 'Not looted yet. At item level ' .. item.baseIlvl .. ':')
+            lines[#lines + 1] = G.describeItem(item, item.baseIlvl)
+            lines[#lines + 1] = G.describeItemEffect(item, item.baseIlvl)
             lines[#lines + 1] = U.col(GREY, 'Drops at item level ') .. item.baseIlvl .. U.col(GREY, ' on Normal, ')
                 .. (item.baseIlvl + 10) .. U.col(GREY, ' Heroic, ') .. (item.baseIlvl + 20) .. U.col(GREY, ' Mythic, up to ')
                 .. (item.baseIlvl + 40) .. U.col(GREY, ' from a +10 keystone.')
@@ -8255,8 +8562,10 @@ do
         UI.setBar(K.progress, owned / #GEAR)
         BlzFrameSetText(K.progressText, U.col(GREY, 'Looted ') .. owned .. ' / ' .. #GEAR)
         BlzFrameSetText(K.average, U.col(GREY, 'Average item level ') .. U.col(GOLD, tostring(gearAverage(p))))
+        -- Beside the six slots, what they add up to: every stat summed, then
+        -- the effects by name.
         local worn = gearEquipped(p)
-        local lines = {}
+        local totals, effects = {}, {}
         for slot = 1, INVENTORY_SIZE do
             local item = worn[slot]
             local o = K.slots[slot]
@@ -8264,15 +8573,39 @@ do
                 local ilvl = Profile.itemLevel(item)
                 UI.setIcon(o, gearIcon(item))
                 UI.frameColor(o, item == K.selected and 255 or 214, item == K.selected and 255 or 170, item == K.selected and 255 or 90)
-                lines[#lines + 1] = U.col(gearHex(ilvl), ilvl .. '  ') .. G.describeBlessing(item.stat, Profile.itemValue(item, ilvl))
+                for _, entry in ipairs(item.stats) do
+                    local x = gearValue(entry.stat, entry.w, ilvl)
+                    -- All attributes count into each of the three.
+                    for _, key in ipairs(entry.key == 'all' and {'str', 'agi', 'int'} or {entry.key}) do
+                        totals[key] = (totals[key] or 0) + x
+                    end
+                end
+                if item.effect then
+                    effects[#effects + 1] = item.effect.name
+                end
             else
                 BlzFrameSetTexture(o.img, TEX.white, 0, true)
                 UI.tint(o.img, 18, 14, 10, 230)
                 UI.frameColor(o, 90, 70, 44)
-                lines[#lines + 1] = U.col('6e665c', 'empty')
             end
         end
-        BlzFrameSetText(K.worn, table.concat(lines, '\n'))
+        local lines = {}
+        for _, key in ipairs(ITEM_STAT_ORDER) do
+            if totals[key] then
+                lines[#lines + 1] = G.describeBlessing(ITEM_STATS[key], totals[key])
+            end
+        end
+        -- One stat a line, then the effects by name (about 28 letters a line);
+        -- ten lines fit beside the slots, so a long list of effects shrinks to
+        -- a count (each item's details name its own).
+        if #effects > 0 then
+            local names = table.concat(effects, ', ')
+            if #lines + math.ceil(#names / 28) > 10 then
+                names = #effects .. ' effects'
+            end
+            lines[#lines + 1] = U.col(GREEN, names)
+        end
+        BlzFrameSetText(K.worn, #lines > 0 and table.concat(lines, '\n') or U.col('6e665c', 'Nothing carried yet.'))
         local selected = K.selected
         if selected == nil then
             -- Open on the first item owned, so Equip and Upgrade are in reach.
@@ -8900,6 +9233,7 @@ do
         TimerStart(CreateTimer(), CFG.TICK, true, function()
             UI.safe(G.tick)
         end)
+        local gearAid = ''
         if Engine.active() then
             -- Camera input stays with the script: the lobby holds the showcase
             -- and the run follows the hero. Clicks and keys still arrive.
@@ -8909,12 +9243,39 @@ do
             if Lobby.pages[tab] then
                 S.tab = tab
             end
+            -- +set survivor_gear "ofro desc clfm" loots every item at its base
+            -- level and carries the ones named (rawcodes), the first selected.
+            gearAid = tostring(EngineCvar('survivor_gear') or '')
+            if gearAid ~= '' then
+                local p = Profile.data
+                p.inv = {}
+                for _, item in ipairs(GEAR) do
+                    p.gear[item.id] = item.baseIlvl
+                end
+                for code in gearAid:gmatch('[a-z0-9]+') do
+                    for _, item in ipairs(GEAR) do
+                        if item.code == code and gearSlotOf(p, item) == nil then
+                            local slot = 1
+                            while p.inv[tostring(slot)] do
+                                slot = slot + 1
+                            end
+                            if slot <= INVENTORY_SIZE then
+                                p.inv[tostring(slot)] = item.index
+                            end
+                        end
+                    end
+                end
+            end
         end
         if Engine.takeRun() then
             G.inArena = true
             G.startRun()
         else
             Lobby.show()
+            local first = gearEquipped(Profile.data)[1]
+            if gearAid ~= '' and Lobby.K and first then
+                Lobby.selectItem(first)
+            end
         end
         if Engine.active() then
             -- Test runs can open an options page directly: +set survivor_menu keys

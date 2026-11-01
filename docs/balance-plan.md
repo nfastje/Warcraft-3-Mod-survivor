@@ -204,7 +204,50 @@ Planned:
 
 - Done in phase 1: version `WS2` in a new file, `profile2.pld`; the old `profile.pld` stays as it was.
 
-## 4. Items (phase 4)
+## 4. Items (phase 4, done 2026-11-01)
+
+As built:
+
+- Every item has two or three stats (Crown of Kings: all attributes) with a weight each, after its
+  Warcraft III self: `ZONE_ITEMS` entries are `{code, name, {stat = weight}, effect}`. A stat's value is
+  `per x weight x gearScale(ilvl)` (`gearValue`); Strength, Agility, Intellect (3 per weight), all attributes
+  (2) and Stamina (2) come in whole points. New item stats: the attributes, all attributes, Stamina, dodge.
+  The old health stat is gone (Stamina gives health). Ids, item levels, the upgrade track and loot work as before.
+- 20 items carry an effect (`ITEM_EFFECTS`, shown as a green "Equip:" line). It scales with item level like a
+  stat, up to a cap (`max`); Reincarnation, Escape and Spell Immunity do not scale. Effects show by name on the
+  damage meter. Two items can share one (Orb of Fire and Orb of Kil'jaeden; Mask of Death and Killmaim): the
+  values add.
+
+| Effect | Items | At base item level | Hook |
+| --- | --- | --- | --- |
+| Frost Orb | Orb of Frost | attacks slow 35 percent, 2 s | `G.attackHit` (`attackSlow`) |
+| Fire Orb | Orb of Fire, Orb of Kil'jaeden | 40 percent of the hit around the target | `G.attackHit` |
+| Dark Minion | Orb of Darkness | 6 percent of kills raise a skeleton (20 s) | `G.onDeath`, `G.raiseMinion` |
+| Corruption | Orb of Corruption | target takes 13.5 percent more from everything, 3 s | `G.attackHit`, `G.damage` |
+| Vampiric Attack | Mask of Death, Killmaim | attacks heal 12 / 14 percent of their damage | `G.attackHit` |
+| Reincarnation | Ankh of Reincarnation | one revive per run | `s.lives` |
+| Escape | Kelen's Dagger of Escape | the hit that would drop you under 30 percent misses, blink away (30 s) | `G.onDamage`, `G.escape` |
+| Sanctuary | Staff of Sanctuary | under 30 percent health, heal 34 percent (60 s) | `G.onDamage` |
+| Immolation | Cloak of Flames | 37.5 percent of attack damage per second around you | `G.updateHero` |
+| War Drums | Warsong Battle Drums | summons deal 26 percent more | `G.onDamage` |
+| Spell Mastery | Gloves of Spell Mastery | spells cost 16 percent less mana (cap 50) | `G.spellValues` |
+| Battle Thirst | Helm of Battlethirst | kills give 24 percent attack speed for 3 s | `G.onDeath`, `G.updateAttack` |
+| Soul Harvest | Grimoire of Souls | 1 Intellect per 25 kills for the run, up to 9 | `G.onDeath`, `G.recomputeStats` |
+| Spell Immunity | Necklace of Spell Immunity | ignores a hit of a tenth of your health or more (15 s) | `G.onDamage` |
+| Frost Armor | Frostguard | attackers slowed 34 percent, 3 s | `G.onDamage` |
+| Searing | Searing Blade | attacks burn for 40 percent of the hit over 3 s | `G.attackHit` (`G.dot`) |
+| Spiked Shield | Skull Shield | attackers take 27 damage | `s.thorns` |
+| Purge | Shaman Claws | 6 percent of attacks stun 1 s | `s.bash` |
+
+- Armory: the details show the stats on one line, the effect, and "Next:" with only what the next upgrade
+  raises (whole attributes and capped effects can stay put for a step). Beside the six slots, the carried items'
+  totals, one stat a line, then the effects by name (a count when they would not fit). The in-run tooltip and the
+  loot toast show the stats too.
+- Test aid: `+set survivor_gear "ofro desc clfm"` (engine) loots every item at its base level and carries the
+  ones named.
+- The smoke test checks every item's text and ten of the effects in a run.
+
+Planned:
 
 Kept: 60 items (one per boss), item level from zone tier and difficulty, the six-step gold upgrade track
 (+3 item levels per step), six slots, quality colours.

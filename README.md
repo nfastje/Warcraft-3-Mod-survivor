@@ -34,7 +34,9 @@ downloads about 200 mo of game data, once.
   the next.
 - **Difficulties**: Normal, Heroic, Mythic and Mythic+, with keystone levels that never end.
 - **Between runs**: gear dropped by bosses (Armory), talents bought with gold, achievements
-  and their rewards, and a Codex of every spell and blessing.
+  and their rewards, and a Codex of every spell and blessing. Each of the 60 Warcraft III items gives two
+  or three stats, and 20 of them an effect of their own: the Orb of Frost slows, Kelen's Dagger blinks you
+  out of a killing blow, the Grimoire of Souls feeds on kills, the Ankh brings you back.
 - **Earned progression**: you start with four heroes (Archmage, Blademaster, Death Knight, Demon
   Hunter) and five talents (Strength, Agility, Intellect, Stamina, Armor). The other heroes join as
   you play: slay a boss, survive five minutes, win with their faction, or clear zones for the Tavern.

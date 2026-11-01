@@ -257,6 +257,13 @@ SDK), host-authoritative, agreed balance, resource estimates. The user is still 
   list ("<Hero> Joins": a boss with the first hero via `p.heroBosses`, 5:00 with the second via `p.heroTime`, kept by `G.endRun`). Starting heroes:
   Archmage, Blademaster, Death Knight, Demon Hunter. `Lobby.enter` refuses a locked hero; tests that call
   `G.startRun` directly (or `survivor_run`) are not gated.
+- Phase 4 (2026-11-01): items. `item.stats` (`{key, stat, w}` in `ITEM_STAT_ORDER`) and `item.effect`
+  (`ITEM_EFFECTS`); every value goes through `gearValue(b, w, ilvl)` (whole attributes, effect caps). Text:
+  `G.describeItem`, `G.describeItemEffect`, `G.describeItemNext`. Effect fields live in `G.baseStats`; their
+  timers and counters (`thirstUntil`, `souls`, `wardReady`, `escapeReady`, `sanctuaryReady`, `flamesClock`) on the
+  run. Effect keys double as damage meter sources (`SOURCE_NAMES`), so they must not clash with spell keys. The
+  engine wraps text anywhere, even inside "+3.4%": keep stat lists one per line, never one wrapped paragraph.
+  Test aid: `+set survivor_gear "ofro desc clfm"`.
 - Loading screens never reach `+screenshot`; capture only the game window with `PrintWindow`.
 - Test aids: `+set survivor_tab codex` opens a lobby tab; `+set survivor_menu keys` opens the options
   at a page (`main`, `audio`, `keys`, `interface`); `+set survivor_run "5 1 1 2"` (hero, zone,

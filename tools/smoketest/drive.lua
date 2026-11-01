@@ -482,6 +482,109 @@ G.endRun(false)
 MOCK.click('Return to Camp')
 note('mana and keys: waits when short, 1 casts, Shift+1 autocast, new spells manual')
 
+-- Items: every one has two or three stats (or all attributes) and a tooltip;
+-- the signature ones carry an effect, and each effect works in a run.
+local GEAR = upvalue(Profile.load, 'GEAR')
+local savedGear, savedInv = Profile.data.gear, Profile.data.inv
+local function itemByCode(code)
+    for _, item in ipairs(GEAR) do
+        if item.code == code then return item end
+    end
+end
+local effects = 0
+for _, item in ipairs(GEAR) do
+    check(#item.stats >= 1 and #item.stats <= 3, item.name .. ' has one to three stats')
+    local text = G.describeItem(item, item.baseIlvl)
+    check(#text > 0 and not text:find('?', 1, true), item.name .. ' describes its stats: ' .. text)
+    if item.effect then
+        effects = effects + 1
+        check(G.describeItemEffect(item, item.baseIlvl):find('Equip: ', 1, true), item.name .. ' describes its effect')
+    end
+end
+check(effects >= 15, 'signature items have effects, got ' .. effects)
+local function wear(codes)
+    Profile.data.gear, Profile.data.inv = {}, {}
+    for slot, code in ipairs(codes) do
+        local item = itemByCode(code)
+        Profile.data.gear[item.id] = item.baseIlvl
+        Profile.data.inv[tostring(slot)] = item.index
+    end
+end
+-- A test enemy too sturdy to die from the effects themselves.
+local function foe(dx, dy)
+    local u = G.createEnemy(run.zone.enemies[1], run.hx + dx, run.hy + dy, {})
+    u.maxHp, u.life = 1e5, 1e5
+    G.refreshEnemyCache()
+    return u
+end
+local function kill(u)
+    UnitDamageTarget(run.hero, u, 1e7, false, false, ATTACK_TYPE_CHAOS, DAMAGE_TYPE_NORMAL, WEAPON_TYPE_WHOKNOWS)
+end
+-- Fire, Darkness, Mask of Death, Kelen's Dagger, Grimoire of Souls, Corruption.
+wear({'ofir', 'odef', 'modt', 'desc', 'grsl', 'ocor'})
+MOCK.click('Armory')
+MOCK.pokeAll()
+check(MOCK.findText('Fire Orb') and MOCK.findText('Strength'), 'the armory sums the carried stats and names the effects')
+S.heroIndex, S.difficulty = 1, 1
+G.startRun()
+run = R()
+local s = run.stats
+check(s.fireSplash > 0 and s.darkMinion > 0 and s.vampiric > 0 and s.escape > 0 and s.souls > 0 and s.corrupt > 0,
+    'worn effects reach the run stats')
+local target, beside = foe(150, 0), foe(170, 20)
+local besideLife = beside.life
+G.attackHit(target, target.x, target.y, 20)
+check(beside.life < besideLife and (run.meter.fireOrb or 0) > 0, 'Orb of Fire splashes around the target')
+check(run.enemies[target].corruptUntil > run.time, 'Orb of Corruption marks the target')
+local intBefore = run.stats.int
+for _ = 1, 25 do kill(foe(300, 0)) end
+check(run.souls == 1 and run.stats.int >= intBefore + 1, 'Grimoire of Souls: 25 kills give 1 Intellect')
+run.stats.darkMinion = 1
+kill(foe(300, 0))
+local minion = nil
+for u, info in pairs(run.summons) do
+    if info.key == 'darkOrb' then minion = u end
+end
+check(minion ~= nil, 'Orb of Darkness raises a skeleton')
+local maxHp = BlzGetUnitMaxHP(run.hero)
+SetWidgetLife(run.hero, maxHp * 0.35)
+local hx = run.hx
+UnitDamageTarget(target, run.hero, maxHp * 0.1, true, false, ATTACK_TYPE_CHAOS, DAMAGE_TYPE_NORMAL, WEAPON_TYPE_WHOKNOWS)
+check(GetWidgetLife(run.hero) >= maxHp * 0.35 - 0.01, "Kelen's Dagger: the hit that would drop under 30 percent misses")
+MOCK.advance(0.1)
+check(math.abs(GetUnitX(run.hero) - hx) > 100 and run.invulnUntil > run.time, "Kelen's Dagger blinks the hero away")
+G.endRun(false)
+MOCK.click('Return to Camp')
+-- Cloak of Flames, Searing Blade, Battlethirst, Spell Immunity, Sanctuary, Spell Mastery.
+wear({'clfm', 'srbd', 'hbth', 'nspi', 'ssan', 'gvsm'})
+G.startRun()
+run = R()
+s = run.stats
+local spell = run.spells[1]
+local plain = {}
+for k, v in pairs(s) do plain[k] = v end
+plain.manaCost = 0
+check(spell.v.mana < G.spellValues(spell.def, spell.rank, spell.power, plain).mana, 'Spell Mastery lowers mana costs')
+target = foe(120, 0)
+foe(100, 60)
+G.attackHit(target, target.x, target.y, 30)
+MOCK.advance(1.5)
+check((run.meter.searing or 0) > 0, 'Searing Blade burns the target')
+check((run.meter.cloak or 0) > 0, 'Cloak of Flames burns nearby enemies')
+kill(foe(300, 0))
+check(run.thirstUntil > run.time, 'Battlethirst: a kill raises attack speed')
+maxHp = BlzGetUnitMaxHP(run.hero)
+SetWidgetLife(run.hero, maxHp)
+UnitDamageTarget(target, run.hero, maxHp * 0.2, true, false, ATTACK_TYPE_CHAOS, DAMAGE_TYPE_NORMAL, WEAPON_TYPE_WHOKNOWS)
+check(GetWidgetLife(run.hero) >= maxHp - 0.01 and run.wardReady > run.time, 'Spell Immunity ignores a heavy hit')
+SetWidgetLife(run.hero, maxHp * 0.35)
+UnitDamageTarget(target, run.hero, maxHp * 0.08, true, false, ATTACK_TYPE_CHAOS, DAMAGE_TYPE_NORMAL, WEAPON_TYPE_WHOKNOWS)
+check(GetWidgetLife(run.hero) > maxHp * 0.35, 'Staff of Sanctuary heals under 30 percent health')
+G.endRun(false)
+MOCK.click('Return to Camp')
+Profile.data.gear, Profile.data.inv = savedGear, savedInv
+note('items: ' .. effects .. ' effects; fire, corruption, souls, minion, escape, burns, thirst, immunity, sanctuary, mastery')
+
 -- 5. Every hero with every spell of its pool at a high rank (no rank limit).
 for index, hero in ipairs(HEROES) do
     S.heroIndex = index
