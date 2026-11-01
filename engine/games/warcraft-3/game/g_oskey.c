@@ -4,10 +4,12 @@
  * Registering a key sets PS_UIFLAG_FORWARD_KEYS for that player's client, which
  * then reports every gameplay key as "oskey <engine-key> <down> <mods>". Keys
  * are matched as Windows virtual-key codes, the values of Reforged's OSKEY_*.
+ * As in Reforged, a registration fires only when the modifiers held equal its
+ * meta key exactly (1 Shift, 2 Ctrl, 4 Alt: the client's KEY_MOD_* bits).
  */
 #include "g_local.h"
 
-#define OSKEY_MAX_EVENTS 512 // registrations; the survivor script registers 92 (46 bindable keys, press and release)
+#define OSKEY_MAX_EVENTS 512 // registrations; the survivor script registers 276 (46 keys, press and release, no modifier, Shift, Ctrl)
 
 /* Engine key codes from client/keys.h; the game module does not include client headers. */
 #define OSKEY_ENGINE_F1 128
@@ -17,6 +19,7 @@ typedef struct {
     trigger_t *trigger;
     uint32_t player;
     int32_t vk;
+    int32_t meta;
     bool down;
 } osKeyEvent_t;
 
@@ -59,13 +62,13 @@ static void G_OsKeyForward(uint32_t player) {
     }
 }
 
-void G_OsKeyRegister(trigger_t *trigger, uint32_t player, int32_t vk, bool down) {
+void G_OsKeyRegister(trigger_t *trigger, uint32_t player, int32_t vk, int32_t meta, bool down) {
     if (!trigger) return;
     if (oskey.num_events >= OSKEY_MAX_EVENTS) {
         fprintf(stderr, "BlzTriggerRegisterPlayerKeyEvent: registration table full (%u)\n", OSKEY_MAX_EVENTS);
         return;
     }
-    oskey.events[oskey.num_events++] = (osKeyEvent_t){ trigger, player, vk, down };
+    oskey.events[oskey.num_events++] = (osKeyEvent_t){ trigger, player, vk, meta, down };
     G_OsKeyForward(player);
 }
 
@@ -100,6 +103,7 @@ void CMD_OsKey(edict_t *ent, uint32_t argc, cstring_t argv[]) {
     FOR_LOOP(i, count) {
         osKeyEvent_t const *reg = &oskey.events[i];
         if (reg->player != player || reg->vk != vk || reg->down != down) continue;
+        if ((uint32_t)reg->meta != oskey.trigger_mods) continue;
         if (jass_triggerdisabled(reg->trigger)) continue;
         jass_executetriggerforplayer(level.vm, reg->trigger, &ent->client->ps);
     }

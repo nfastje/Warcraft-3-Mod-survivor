@@ -119,8 +119,12 @@ As built (decision: Warcraft III costs, rate-matched, with spells that can be tu
   Wave). Auras, orbits and passives never cast and are free.
 - Pool 15 per Intellect, regeneration 1 + 0.05 per Intellect per second (`CFG.MANA_*`). Every hero can
   keep its starting spell going at level 1 (Lich: Frost Nova 1.80 per second against 2.00).
-- A spell short of mana stays ready and waits (its slot turns blue). Clicking a slot or pressing 5 to 8
-  turns a spell off (dark, "OFF") so the others get the mana.
+- A spell short of mana stays ready and waits (its slot turns blue).
+- Keys (changed the same day, at the user's request): spells cast on 1 to 4 or a click on their slot;
+  Shift+1 to 4 turns a spell's autocast on or off (off when learned, so mana goes where the player
+  sends it; on for touch screens, which have no keys); Ctrl+1 to 4 picks a card. Auras, orbits and
+  passives are always on and have no key. A cast from its key skips autocast's conditions (a heal heals
+  at once, a buff starts with no pack close by).
 - Mana sources: violet mana runes (30 percent of the pool), Brilliance Aura (+0.8 mana per second per
   rank instead of spell haste, as in Warcraft III), Siphon Life (4 mana per enemy), Mana Burn (5 per hit),
   Sobi Mask and Khadgar's Pipe of Insight (mana regeneration instead of spell haste).

@@ -20,6 +20,10 @@ local HEROES = upvalue(G.startRun, 'HEROES')
 local SPELLS = upvalue(G.learnSpell, 'SPELLS')
 local Profile = upvalue(G.endRun, 'Profile')
 assert(UI and G and S and HEROES and SPELLS and Profile, 'internals not found')
+-- Cards are picked with Ctrl+1 to 4 (meta key 2). Spells start with
+-- autocast off for players; the test's runs need them to cast on their own.
+local CTRL = 2
+upvalue(G.learnSpell, 'CFG').AUTOCAST = true
 
 local realDamage = UnitDamageTarget
 function UnitDamageTarget(src, target, amount, ...)
@@ -58,7 +62,7 @@ local function play(seconds, opts)
             if math.random() < 0.1 and run.banishes > 0 then
                 upvalue(G.tryOpenHand, 'Cards').banish(1)
             end
-            MOCK.tap(keys[math.random(1, #run.hand.cards)])
+            MOCK.tap(keys[math.random(1, #run.hand.cards)], CTRL)
         end
         -- Mock enemies have no AI: walk them toward the hero.
         for u in pairs(run.enemies) do
@@ -337,7 +341,7 @@ local function lying(p)
 end
 for _ = 1, 60 do
     MOCK.advance(0.25)
-    if R().hand then MOCK.tap(OSKEY_1) end
+    if R().hand then MOCK.tap(OSKEY_1, CTRL) end
     if not lying(farCoin) and not lying(farGem) then break end
 end
 check(not lying(farCoin) and not lying(farGem), 'the wisp fetched the far coin and gem')
@@ -378,7 +382,7 @@ MOCK.advance(0.5)
 check(objectOf('chest') == nil and run.worldChestsOpened == 1, 'the chest opens once the gold is there')
 check(run.hand ~= nil or run.pendingChests > 0, 'the chest deals a card hand')
 check(chest.priceTag == nil, 'its price tag goes with it')
-if run.hand then MOCK.tap(OSKEY_1) end
+if run.hand then MOCK.tap(OSKEY_1, CTRL) end
 -- Bodies block: a step into an enemy is held back, and a step away is free.
 G.refreshEnemyCache()
 local blocker = run.elist[1]
@@ -399,8 +403,9 @@ MOCK.click('Return to Camp')
 check(#MOCK.liveTags() == 0, 'no price tag is left after the run')
 note('world objects: vein mined, chest opened for 40 gold, collision blocks')
 
--- Mana: a spell short of mana waits, casts once the mana is there, and one
--- turned off never casts. Every spell that casts costs mana.
+-- Mana and casting: a spell short of mana waits, casts once the mana is
+-- there; with autocast off (Shift+1) it waits for its key (1), which casts
+-- it. New spells start with autocast off. Every spell that casts costs mana.
 S.heroIndex, S.difficulty = 1, 1
 G.startRun()
 run = R()
@@ -416,14 +421,23 @@ check(spellInst.waiting and spellInst.cd == 0, 'a spell short of mana waits, rea
 run.mana = run.maxMana
 MOCK.advance(0.1)
 check(spellInst.cd > 0 and not spellInst.waiting and run.mana < run.maxMana, 'it casts and pays once the mana is there')
-G.toggleSpell(1)
-check(spellInst.off, 'a click or its key turns a spell off')
+local SHIFT = 1
+check(spellInst.auto, 'the test runs with autocast on')
+MOCK.tap(OSKEY_1, SHIFT)
+check(not spellInst.auto, 'Shift+1 turns autocast off')
 spellInst.cd = 0
 run.mana = run.maxMana
 MOCK.advance(0.5)
-check(spellInst.cd == 0 and run.mana >= run.maxMana - 0.001, 'a spell turned off never casts')
-G.toggleSpell(1)
-check(not spellInst.off, 'and back on')
+check(spellInst.cd == 0 and run.mana >= run.maxMana - 0.001, 'with autocast off a ready spell waits for its key')
+MOCK.tap(OSKEY_1)
+check(spellInst.cd > 0 and run.mana < run.maxMana, '1 casts spell 1 and pays for it')
+MOCK.tap(OSKEY_1, SHIFT)
+check(spellInst.auto, 'Shift+1 turns autocast back on')
+local CFG = upvalue(G.learnSpell, 'CFG')
+CFG.AUTOCAST = false
+local fresh = G.learnSpell('water_elemental', 1.0)
+check(not fresh.auto, 'for players, a new spell starts with autocast off')
+CFG.AUTOCAST = true
 for key, def in pairs(SPELLS) do
     if def.kind ~= 'passive' and def.kind ~= 'aura' and def.kind ~= 'orbit' then
         check((def.mana or 0) > 0, key .. ' casts, so it costs mana')
@@ -431,7 +445,7 @@ for key, def in pairs(SPELLS) do
 end
 G.endRun(false)
 MOCK.click('Return to Camp')
-note('mana: waits when short, pays when cast, stays off when turned off')
+note('mana and keys: waits when short, 1 casts, Shift+1 autocast, new spells manual')
 
 -- 5. Every hero with every spell of its pool at a high rank (no rank limit).
 for index, hero in ipairs(HEROES) do
@@ -461,10 +475,10 @@ for index, hero in ipairs(HEROES) do
     if run.spellByKey.raven_form then
         -- Medivh turns into the raven (the Alternate sequences), flies over
         -- enemies, and comes back to his own attack when it ends.
-        local CAST = upvalue(G.updateSpells, 'CAST')
+        local CAST = upvalue(G.cast, 'CAST')
         local inst = run.spellByKey.raven_form
         MOCK.advance(0.1)
-        if run.hand then MOCK.tap(OSKEY_1) end
+        if run.hand then MOCK.tap(OSKEY_1, CTRL) end
         for _ = 1, 5 do
             G.createEnemy(G.pickEnemyType(), run.hx + 60, run.hy, {})
         end
@@ -475,7 +489,7 @@ for index, hero in ipairs(HEROES) do
         check(math.abs(nx - (run.hx + 20)) < 0.01, 'the raven flies over enemies')
         for _ = 1, math.ceil(inst.v.dur / 0.25) + 4 do
             MOCK.advance(0.25)
-            if run.hand then MOCK.tap(OSKEY_1) end
+            if run.hand then MOCK.tap(OSKEY_1, CTRL) end
         end
         check(run.buffs.raven_form == nil or run.buffs.raven_form.untilT > run.time, 'raven form ends')
         if run.buffs.raven_form == nil then
@@ -487,10 +501,10 @@ for index, hero in ipairs(HEROES) do
     if run.spellByKey.storm_earth_fire then
         -- The Brewmaster splits into three spirits, hidden and invulnerable,
         -- and merges back when the split ends.
-        local CAST = upvalue(G.updateSpells, 'CAST')
+        local CAST = upvalue(G.cast, 'CAST')
         local inst = run.spellByKey.storm_earth_fire
         MOCK.advance(0.1)
-        if run.hand then MOCK.tap(OSKEY_1) end
+        if run.hand then MOCK.tap(OSKEY_1, CTRL) end
         check(run.split or CAST.summon(inst, inst.v), 'storm, earth and fire casts')
         inst.cd = inst.v.cd
         -- The mock lists npn1 as an unknown rawcode: Storm and Earth come out.
@@ -500,7 +514,7 @@ for index, hero in ipairs(HEROES) do
         local spirits = run.split.units
         for _ = 1, math.ceil(inst.v.dur / 0.25) + 4 do
             MOCK.advance(0.25)
-            if run.hand then MOCK.tap(OSKEY_1) end
+            if run.hand then MOCK.tap(OSKEY_1, CTRL) end
         end
         check(run.split == nil, 'the split ends, time ' .. run.time .. ' until ' .. tostring(run.split and run.split.untilT)
             .. ' paused=' .. tostring(run.paused) .. ' hand=' .. tostring(run.hand ~= nil) .. ' ended=' .. tostring(run.ended)
@@ -521,7 +535,7 @@ for index, hero in ipairs(HEROES) do
         local attacker = next(run.enemies) or run.hero
         UnitDamageTarget(attacker, run.hero, 1e7, true, false, ATTACK_TYPE_CHAOS, DAMAGE_TYPE_NORMAL, WEAPON_TYPE_WHOKNOWS)
         MOCK.advance(3)
-        if run.hand then MOCK.tap(OSKEY_1) end
+        if run.hand then MOCK.tap(OSKEY_1, CTRL) end
     end
     check(run.ended, hero.name .. ' run ends after ' .. blows .. ' blows')
     MOCK.click('Return to Camp')

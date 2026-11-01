@@ -3189,7 +3189,7 @@ scriptFrame_t *G_ScriptFrameTrigger(void);
 int32_t G_ScriptFrameTriggerEvent(void);
 void G_LoadReforgedDeclarations(jass_t *j);
 void G_OsKeyReset(void);
-void G_OsKeyRegister(trigger_t *trigger, uint32_t player, int32_t vk, bool down);
+void G_OsKeyRegister(trigger_t *trigger, uint32_t player, int32_t vk, int32_t meta, bool down);
 void G_OsKeyClientBegin(edict_t *ent);
 int32_t G_OsKeyTrigger(void);
 bool G_OsKeyTriggerDown(void);

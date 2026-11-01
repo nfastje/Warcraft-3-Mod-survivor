@@ -222,11 +222,12 @@ function TriggerRegisterPlayerUnitEvent(t, p, e)
     t.events[#t.events + 1] = {kind = e == EVENT_PLAYER_UNIT_DEATH and 'death' or 'order', player = p}
 end
 function BlzTriggerRegisterFrameEvent(t, f, e) t.events[#t.events + 1] = {kind = 'frame', frame = f, event = e} end
-function BlzTriggerRegisterPlayerKeyEvent(t, p, k, m, down) t.events[#t.events + 1] = {kind = 'key', key = k, down = down} end
+function BlzTriggerRegisterPlayerKeyEvent(t, p, k, m, down) t.events[#t.events + 1] = {kind = 'key', key = k, meta = m or 0, down = down} end
 function BlzGetTriggerFrame() return ctx().frame end
 function BlzGetTriggerFrameEvent() return ctx().event end
 function BlzGetTriggerPlayerKey() return ctx().key end
 function BlzGetTriggerPlayerIsKeyDown() return ctx().down end
+function BlzGetTriggerPlayerMetaKey() return ctx().meta or 0 end
 
 -- Timers
 function CreateTimer() return handle('timer', {}) end
@@ -436,10 +437,15 @@ function MOCK.pokeAll(skip)
     return list
 end
 
-function MOCK.key(k, down)
-    fire('key', {key = k, down = down, player = Player(0)}, function(ev) return ev.key == k and ev.down == down end)
+-- meta: the modifiers held (1 Shift, 2 Ctrl); as in Reforged, only a
+-- registration for exactly those modifiers fires.
+function MOCK.key(k, down, meta)
+    meta = meta or 0
+    fire('key', {key = k, down = down, meta = meta, player = Player(0)}, function(ev)
+        return ev.key == k and ev.down == down and ev.meta == meta
+    end)
 end
-function MOCK.tap(k) MOCK.key(k, true); MOCK.key(k, false) end
+function MOCK.tap(k, meta) MOCK.key(k, true, meta); MOCK.key(k, false, meta) end
 -- A right-click on the ground, as the hero's point order.
 function MOCK.order(u, x, y)
     fire('order', {unit = u, x = x, y = y, player = Player(0)}, function(ev) return ev.player == u.owner end)

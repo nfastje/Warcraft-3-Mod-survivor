@@ -52,8 +52,9 @@ downloads about 200 mo of game data, once.
 | --- | --- |
 | Right-click | Walk there (default) |
 | W A S D | Walk, when keyboard movement is on (Options > Keybinds) |
-| 1 2 3 4 | Pick a level-up card |
-| 5 6 7 8, or click a spell | Turn that spell off or on (spells cost mana; a spell turned off leaves it to the others) |
+| 1 2 3 4, or click a spell | Cast that spell (it costs mana; auras are always on) |
+| Shift + 1 2 3 4 | Turn that spell's autocast on or off (off when you learn it) |
+| Ctrl + 1 2 3 4 | Pick a level-up card |
 | R | Reroll the cards |
 | Space | Enter the zone (lobby) |
 | Esc | Game menu: options, audio, keybinds, interface |

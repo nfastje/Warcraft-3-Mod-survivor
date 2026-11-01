@@ -219,7 +219,8 @@ CONVERT_FUNC(UnitWeaponIntegerField, unitweaponintegerfield);
 uint32_t BlzTriggerRegisterPlayerKeyEvent(jass_t *j) {
     trigger_t *trigger = jass_checkhandle(j, 1, "trigger");
     player_t *player = jass_checkhandle(j, 2, "player");
-    if (trigger && player) G_OsKeyRegister(trigger, PLAYER_NUM(player), JassEnum(j, 3), jass_checkboolean(j, 5));
+    if (trigger && player)
+        G_OsKeyRegister(trigger, PLAYER_NUM(player), JassEnum(j, 3), jass_checkinteger(j, 4), jass_checkboolean(j, 5));
     return jass_pushnullhandle(j, "event");
 }
 

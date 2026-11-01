@@ -241,8 +241,17 @@ SDK), host-authoritative, agreed balance, resource estimates. The user is still 
   trimmed game data lacks them. Upgrade codes return their first level's art (Rhst gives the Sorceress Adept icon,
   which the data lacks): name the icon file instead. Phase 2 (2026-11-01): mana. `MANA_DATA` (Warcraft III cost
   and cooldown per ability) sets `def.mana`; `R.mana`/`R.maxMana` are the script's own (the engine has no
-  `BlzSetUnitMaxMana`); `G.updateSpells` waits for mana and skips spells turned off (`inst.off`, `G.toggleSpell`,
-  actions `spell1`-`spell4` on 5-8: Q is the engine's quest-log bind, digits are control groups but harmless).
+  `BlzSetUnitMaxMana`); `G.updateSpells` waits for mana.
+- Keys (2026-11-01): spells cast on 1-4 or a slot click (`G.castSpell` -> `G.cast(inst, true)`; manual casts
+  skip the heal/buff conditions), Shift+1-4 toggles autocast (`inst.auto`, off when learned: `CFG.AUTOCAST`, on
+  for touch; test aid `+set survivor_autocast 1`), Ctrl+1-4 picks cards. A binding is key + 256 x modifiers
+  (`META_STEP`; Reforged meta keys 1 Shift, 2 Ctrl), every key is registered plain, Shift and Ctrl (Reforged fires
+  only the exact modifiers), and movement keys fall back to their plain binding while a modifier is held. The
+  engine now does the same: `g_oskey.c` keeps each registration's meta and fires it only for those exact
+  modifiers, and with `cl_fkeys 0` letters and digits skip their stock binds and command-card hotkeys (Q was the
+  quest log, digits control groups, S Stop). Test key events through `oskey <engine key> <down> <mods>` in a cfg:
+  keys posted to a hidden window with PostMessage do not carry Shift (Windows does not see it held). Ctrl+1-4
+  switch browser tabs in Chrome: the web build needs other card keys.
 - Loading screens never reach `+screenshot`; capture only the game window with `PrintWindow`.
 - Test aids: `+set survivor_tab codex` opens a lobby tab; `+set survivor_menu keys` opens the options
   at a page (`main`, `audio`, `keys`, `interface`); `+set survivor_run "5 1 1 2"` (hero, zone,

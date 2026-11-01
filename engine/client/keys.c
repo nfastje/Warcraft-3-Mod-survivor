@@ -145,9 +145,11 @@ void Key_Event(keyCode_t key, uint32_t mods, bool down, uint32_t time) {
         Cmd_ForwardToServer(cmd);
     }
 
-    /* cl_fkeys 0 (set by the survivor script): F1-F11 run none of their stock binds
-     * (hero select, quick save, game menu, quests, allies). Script key events still get them. */
-    if (cls.key_dest == key_game && key >= K_F1 && key <= K_F11 && !Cvar_Integer("cl_fkeys", 1)) return;
+    /* cl_fkeys 0 (set by the survivor script): F1-F11, letters and digits run none of their
+     * stock binds or command-card hotkeys (hero select, quick save, game menu, quests on Q,
+     * control groups on the digits, Stop on S). Script key events still get them. */
+    if (cls.key_dest == key_game && !Cvar_Integer("cl_fkeys", 1) &&
+        ((key >= K_F1 && key <= K_F11) || (key >= 'a' && key <= 'z') || (key >= '0' && key <= '9'))) return;
 
     if (down) {
         key_down_mods[key] = (uint8_t)(mods & KEY_MOD_MASK);

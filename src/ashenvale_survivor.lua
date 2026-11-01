@@ -32,6 +32,10 @@ do
         MAX_ENEMIES = 150,
         MAX_PICKUPS = 220,
         SPELL_SLOTS = 4,             -- spells and blessings have no rank limit
+        -- Spells cast on their key (1 to 4) or a click; Shift with the key turns
+        -- their autocast on or off. New spells start with it off (on a touch
+        -- screen, which has no keys, on). Auras, orbits and passives always work.
+        AUTOCAST = false,
         MAX_SUMMONS = 120,           -- pets alive at once (Persistence stacks them up)
         MAX_WORLD_OBJECTS = 6,       -- chests, shrines and treasure lying in the arena at once
         WORLD_OBJECT_REACH = 150.0,  -- walking this close to one uses it
@@ -4482,12 +4486,12 @@ do
         G.fx(FX.teleport, R.hx, R.hy, 1.0)
     end
 
-    CAST.heal = function(inst, v)
+    CAST.heal = function(inst, v, manual)
         local def = inst.def
-        -- Heals that also hurt fire when hurt or when a pack closes in.
+        -- Autocast heals fire when hurt, those that also hurt when a pack closes in.
         local hurt = GetWidgetLife(R.hero) < BlzGetUnitMaxHP(R.hero) * (def.threshold or 0.8)
         local crowded = def.dmg and def.radius and G.countInRange(R.hx, R.hy, v.radius) >= 3
-        if not hurt and not crowded then
+        if not manual and not hurt and not crowded then
             return false
         end
         G.heal(v.heal)
@@ -4502,17 +4506,20 @@ do
         return true
     end
 
-    CAST.buff = function(inst, v)
+    CAST.buff = function(inst, v, manual)
         local def = inst.def
         if R.buffs[def.key] then
             return false
         end
-        if def.trigger == 'lowhp' then
-            if GetWidgetLife(R.hero) > BlzGetUnitMaxHP(R.hero) * 0.35 then
+        -- Autocast waits for low health or a pack close by; a key casts at once.
+        if not manual then
+            if def.trigger == 'lowhp' then
+                if GetWidgetLife(R.hero) > BlzGetUnitMaxHP(R.hero) * 0.35 then
+                    return false
+                end
+            elseif G.countInRange(R.hx, R.hy, 450) < 4 then
                 return false
             end
-        elseif G.countInRange(R.hx, R.hy, 450) < 4 then
-            return false
         end
         local buff = {def = def, v = v, untilT = R.time + v.dur, icon = U.spellIcon(def)}
         if def.fx then
@@ -4671,26 +4678,13 @@ do
                 if not (R.split and inst.def.split) then
                     inst.cd = inst.cd - dt
                 end
-                -- A split hero (Storm, Earth and Fire) casts nothing until it merges.
-                -- A spell turned off, or short of mana, stays ready and waits.
-                inst.waiting = false
-                if inst.cd <= 0 and (R.split or inst.off) then
+                -- A ready spell waits for its key, or casts itself with autocast
+                -- on. Short of mana it waits too (its slot turns blue). A split
+                -- hero (Storm, Earth and Fire) casts nothing until it merges.
+                inst.waiting = R.mana < inst.v.mana
+                if inst.cd <= 0 then
                     inst.cd = 0
-                elseif inst.cd <= 0 and R.mana < inst.v.mana then
-                    inst.cd = 0
-                    inst.waiting = true
-                elseif inst.cd <= 0 then
-                    if CAST[kind](inst, inst.v) then
-                        R.mana = R.mana - inst.v.mana
-                        inst.cd = inst.v.cd
-                        -- A standing hero shows the cast (Spell, Spell Slam, ...).
-                        if R and not R.ended then
-                            G.heroSwing(inst.def.anim or R.castAnim or 'spell', 0.5)
-                            if inst.def.sound then
-                                G.sound(inst.def.sound, R.hx, R.hy)
-                            end
-                        end
-                    else
+                    if inst.auto and not R.split and not inst.waiting and not G.cast(inst, false) then
                         inst.cd = 0.3
                     end
                 end
@@ -4701,14 +4695,43 @@ do
         end
     end
 
+    -- One cast of a spell; false when it found nothing to cast on. A cast
+    -- from its key (manual) skips the conditions autocast waits for: a heal
+    -- heals at once, a buff starts with no pack close by.
+    function G.cast(inst, manual)
+        local run = R
+        if not CAST[inst.def.kind](inst, inst.v, manual) then
+            return false
+        end
+        run.mana = run.mana - inst.v.mana
+        inst.cd = inst.v.cd
+        -- A standing hero shows the cast (Spell, Spell Slam, ...).
+        if R and not R.ended then
+            G.heroSwing(inst.def.anim or R.castAnim or 'spell', 0.5)
+            if inst.def.sound then
+                G.sound(inst.def.sound, R.hx, R.hy)
+            end
+        end
+        return true
+    end
+
+    -- A spell's key or a click on its slot: casts it if ready and paid for.
+    function G.castSpell(i)
+        local inst = R and not R.ended and not R.paused and R.spells[i]
+        if not G.canToggle(inst) or R.split or inst.cd > 0 or R.mana < inst.v.mana then
+            return
+        end
+        G.cast(inst, true)
+    end
+
     function G.addMana(amount)
         R.mana = math.max(0, math.min(R.maxMana, R.mana + amount))
     end
 
-    -- Spells that cast (not auras, orbits or passives) can be turned off,
-    -- so a cheap spell does not take all the mana from the others.
+    -- Spells that cast (not auras, orbits or passives) have a key and an
+    -- autocast to turn on or off.
     function G.canToggle(inst)
-        return inst ~= nil and not FREE_KINDS[inst.def.kind]
+        return inst ~= nil and inst ~= false and not FREE_KINDS[inst.def.kind]
     end
 
     function G.toggleSpell(i)
@@ -4716,12 +4739,13 @@ do
         if not G.canToggle(inst) then
             return
         end
-        inst.off = not inst.off
+        inst.auto = not inst.auto
         Hud.refreshSlotStates()
     end
 
     function G.learnSpell(key, power)
-        local inst = {def = SPELLS[key], rank = 1, power = power or 1.0, cd = 0.5}
+        local inst = {def = SPELLS[key], rank = 1, power = power or 1.0, cd = 0.5,
+            auto = CFG.AUTOCAST or Engine.touch() or (Engine.active() and EngineCvar('survivor_autocast') == '1')}
         R.spells[#R.spells + 1] = inst
         R.spellByKey[key] = inst
         G.recomputeStats()
@@ -5642,15 +5666,17 @@ do
         for i = 1, CFG.SPELL_SLOTS do
             local sx = x0 + (i - 1) * (size + gap)
             -- Hovering a slot shows what its spell does (Hud.spellTip);
-            -- clicking turns the spell off or on (G.toggleSpell).
+            -- clicking casts it, like its key (G.castSpell).
             local slot = UI.icon(root, TEX.white, sx, slotTop, size, function()
-                G.toggleSpell(i)
-                Hud.spellTip(i)
+                G.castSpell(i)
             end, function()
                 Hud.spellTip(i)
             end, Hud.hideTip)
             slot.shade = UI.box(root, sx, slotTop, size, size, 0, 0, 0, 170)
-            slot.offText = UI.text(root, '', sx, slotTop - size * 0.34, size, 0.012 * k, 0.0082 * k, TEXT_JUSTIFY_CENTER)
+            -- The key on a dark corner, readable over bright icons.
+            slot.keyBox = UI.box(root, sx, slotTop, 0.0105 * k, 0.0115 * k, 0, 0, 0, 175)
+            slot.keyText = UI.text(root, '', sx + 0.002 * k, slotTop - 0.001 * k, size, 0.011 * k, 0.0072 * k)
+            slot.autoText = UI.text(root, '', sx, slotTop + 0.012 * k, size, 0.011 * k, 0.0072 * k, TEXT_JUSTIFY_CENTER)
             slot.rank = UI.text(root, '', sx, slotTop - size + 0.011 * k, size - 0.002 * k, 0.011 * k, 0.0078 * k, TEXT_JUSTIFY_RIGHT)
             slot.x, slot.size = sx, size
             Hud.slots[i] = slot
@@ -5754,9 +5780,10 @@ do
             if v.mana > 0 then
                 sub = sub .. '  -  ' .. U.col('8fb4ff', v.mana .. ' mana')
             end
-            local key = Keys.label('spell' .. i)
-            body = body .. '\n' .. U.col(GREY, (inst.off and 'Turned off: click or press ' or 'Click or press ')
-                .. key .. (inst.off and ' to turn it on.' or ' to turn it off.'))
+            body = body .. '\n' .. U.col(GREY, 'Click or press ' .. Keys.label('spell' .. i) .. ' to cast.  '
+                .. Keys.label('auto' .. i) .. ' turns autocast ' .. (inst.auto and 'off.' or 'on.'))
+        else
+            body = body .. '\n' .. U.col(GREY, 'Always on.')
         end
         Hud.showTip(0.4 - Hud.tip.w / 2, Hud.slotTop + 0.016 * Hud.tip.k, U.spellIcon(def),
             U.col(GOLD, def.name) .. U.col(GREY, '   rank ' .. inst.rank .. rankLimit(def.maxRank)), sub, body)
@@ -5930,26 +5957,37 @@ do
         end)
     end
 
-    -- Spell slot colours: dark with OFF when turned off, blue while the
-    -- spell waits for mana (as Warcraft III shows a spell its hero cannot
-    -- pay for).
+    -- Spell slots: the key that casts it in the corner, AUTO above it and a
+    -- brighter frame while autocast is on, blue while the hero cannot pay for
+    -- it (as Warcraft III shows a spell short of mana). Auras, orbits and
+    -- passives have no key.
     function Hud.refreshSlotStates()
         if R == nil or Hud.slots == nil then
             return
         end
         for i, slot in ipairs(Hud.slots) do
             local inst = R.spells[i]
-            local state = inst and (inst.off and 'off' or (inst.waiting and 'mana' or 'ready')) or 'empty'
+            local castable = G.canToggle(inst)
+            local state = 'empty'
+            if castable then
+                state = (inst.waiting and 'mana' or 'ready') .. (inst.auto and ' auto' or '') .. ' ' .. Keys.label('spell' .. i)
+            elseif inst then
+                state = 'always'
+            end
             if slot.state ~= state then
                 slot.state = state
-                if state == 'off' then
-                    UI.tint(slot.img, 70, 70, 70, 255)
-                elseif state == 'mana' then
-                    UI.tint(slot.img, 90, 110, 255, 255)
-                elseif state == 'ready' then
-                    UI.tint(slot.img, 255, 255, 255, 255)
+                if inst then
+                    local blue = castable and inst.waiting
+                    UI.tint(slot.img, blue and 90 or 255, blue and 110 or 255, 255, 255)
+                    if castable and inst.auto then
+                        UI.frameColor(slot, 255, 226, 120)
+                    else
+                        UI.frameColor(slot, 214, 170, 90)
+                    end
                 end
-                BlzFrameSetText(slot.offText, state == 'off' and U.col(RED, 'OFF') or '')
+                BlzFrameSetText(slot.autoText, castable and inst.auto and U.col(GOLD, 'AUTO') or '')
+                BlzFrameSetText(slot.keyText, castable and U.col('e6e6e6', Keys.label('spell' .. i)) or '')
+                BlzFrameSetVisible(slot.keyBox, castable)
             end
         end
     end
@@ -5968,6 +6006,9 @@ do
                 UI.tint(slot.img, 18, 14, 10, 230)
                 UI.frameColor(slot, 90, 70, 44)
                 BlzFrameSetText(slot.rank, '')
+                BlzFrameSetText(slot.keyText, '')
+                BlzFrameSetText(slot.autoText, '')
+                BlzFrameSetVisible(slot.keyBox, false)
                 BlzFrameSetVisible(slot.shade, false)
             end
         end
@@ -6381,7 +6422,8 @@ do
         else
             BlzFrameSetText(Cards.pillText, U.col('140f0a', 'L E V E L  ' .. R.level))
             BlzFrameSetText(Cards.title, U.col(GOLD, 'Level Up!'))
-            BlzFrameSetText(Cards.subtitle, U.col(GREY, 'Choose a card. Its rarity decides how strong it is.'))
+            BlzFrameSetText(Cards.subtitle, U.col(GREY, 'Choose a card (' .. Keys.label('card1') .. ' to '
+                .. Keys.label('card4') .. ' or a click). Its rarity decides how strong it is.'))
         end
         local total = n * CARD_W + (n - 1) * CARD_GAP
         local x0 = 0.4 - total / 2
@@ -6684,6 +6726,12 @@ do
     for _, entry in ipairs(KEY_LIST) do
         KEY_LABEL[entry[2]] = entry[3]
     end
+    -- A binding is a key code plus META_STEP times the modifiers held with it
+    -- (Reforged meta keys: 1 Shift, 2 Ctrl), so Shift+1 and Ctrl+1 are keys of
+    -- their own. Every key is registered with each of these modifiers.
+    local META_SHIFT, META_CTRL, META_STEP = 1, 2, 256
+    local META_KEYS = {0, META_SHIFT, META_CTRL}
+    local META_LABEL = {[0] = '', [META_SHIFT] = 'Shift+', [META_CTRL] = 'Ctrl+'}
 
     -- Rebindable actions, in the order the Keybinds page lists them. The
     -- movement keys only walk with keyboard movement on.
@@ -6692,16 +6740,19 @@ do
         {key = 'left', label = 'Move left', default = 65, dx = -1, dy = 0},
         {key = 'down', label = 'Move down', default = 83, dx = 0, dy = -1},
         {key = 'right', label = 'Move right', default = 68, dx = 1, dy = 0},
-        {key = 'card1', label = 'Pick card 1', default = 49},
-        {key = 'card2', label = 'Pick card 2', default = 50},
-        {key = 'card3', label = 'Pick card 3', default = 51},
-        {key = 'card4', label = 'Pick card 4', default = 52},
+        {key = 'spell1', label = 'Cast spell 1', default = 49},
+        {key = 'spell2', label = 'Cast spell 2', default = 50},
+        {key = 'spell3', label = 'Cast spell 3', default = 51},
+        {key = 'spell4', label = 'Cast spell 4', default = 52},
+        {key = 'auto1', label = 'Spell 1 autocast on or off', default = META_STEP * META_SHIFT + 49},
+        {key = 'auto2', label = 'Spell 2 autocast on or off', default = META_STEP * META_SHIFT + 50},
+        {key = 'auto3', label = 'Spell 3 autocast on or off', default = META_STEP * META_SHIFT + 51},
+        {key = 'auto4', label = 'Spell 4 autocast on or off', default = META_STEP * META_SHIFT + 52},
+        {key = 'card1', label = 'Pick card 1', default = META_STEP * META_CTRL + 49},
+        {key = 'card2', label = 'Pick card 2', default = META_STEP * META_CTRL + 50},
+        {key = 'card3', label = 'Pick card 3', default = META_STEP * META_CTRL + 51},
+        {key = 'card4', label = 'Pick card 4', default = META_STEP * META_CTRL + 52},
         {key = 'reroll', label = 'Reroll the cards', default = 82},
-        -- 5 to 8: the number keys after the cards (Q opens the engine's quest log).
-        {key = 'spell1', label = 'Spell 1 on or off', default = 53},
-        {key = 'spell2', label = 'Spell 2 on or off', default = 54},
-        {key = 'spell3', label = 'Spell 3 on or off', default = 55},
-        {key = 'spell4', label = 'Spell 4 on or off', default = 56},
         {key = 'stats', label = 'Show or hide the stats', default = 67},
         {key = 'play', label = 'Enter the zone (lobby)', default = 32}
     }
@@ -6721,8 +6772,14 @@ do
         return Profile.data.binds[action] or ACTION_BY_KEY[action].default
     end
 
+    -- 'Shift+1' for a binding with its modifiers.
+    function Keys.comboLabel(code)
+        local meta = code // META_STEP
+        return (META_LABEL[meta] or '') .. (KEY_LABEL[code - meta * META_STEP] or '?')
+    end
+
     function Keys.label(action)
-        return KEY_LABEL[Keys.code(action)] or '?'
+        return Keys.comboLabel(Keys.code(action))
     end
 
     -- The four movement keys, as 'W A S D'.
@@ -7260,9 +7317,10 @@ do
         end
         local move = Keys.wasd() and (Keys.moveLabel() .. ' to move')
             or (Engine.active() and 'Right-click or hold right-click to move' or 'Right-click to move')
-        BlzFrameSetText(Lobby.footer, U.col(GREY, move .. '  -  attacks and spells cast themselves  -  '
-            .. Keys.label('card1') .. ' ' .. Keys.label('card2') .. ' ' .. Keys.label('card3') .. ' picks a card  -  '
-            .. Keys.label('spell1') .. '-' .. Keys.label('spell4') .. ' or a click turns a spell off  -  '
+        BlzFrameSetText(Lobby.footer, U.col(GREY, move .. '  -  '
+            .. Keys.label('spell1') .. ' to ' .. Keys.label('spell4') .. ' or a click casts a spell  -  '
+            .. Keys.label('auto1') .. ' to ' .. Keys.label('auto4') .. ' autocast  -  '
+            .. Keys.label('card1') .. ' to ' .. Keys.label('card4') .. ' picks a card  -  '
             .. Keys.label('reroll') .. ' rerolls  -  ' .. Keys.label('play') .. ' to play  -  Esc for options'))
     end
 
@@ -8540,9 +8598,11 @@ do
         -- Holding a key repeats key-down events; act only on the press.
         local pressed = down and not S.down[code]
         S.down[code] = down
+        local meta = BlzGetTriggerPlayerMetaKey() or 0
+        local combo = code + META_STEP * meta
         if Options.waiting then
             if pressed then
-                Options.capture(code)
+                Options.capture(combo)
             end
             return
         end
@@ -8552,7 +8612,14 @@ do
             end
             return
         end
-        local name = Keys.actionOf and Keys.actionOf[code]
+        local name = Keys.actionOf and Keys.actionOf[combo]
+        -- Movement keys keep walking while Shift or Ctrl is held.
+        if name == nil and meta ~= 0 then
+            local plain = Keys.actionOf and Keys.actionOf[code]
+            if plain and ACTION_BY_KEY[plain].dx then
+                name = plain
+            end
+        end
         if name then
             S.keys[name] = down
             if pressed then
@@ -8616,7 +8683,11 @@ do
             return
         end
         if name:sub(1, 5) == 'spell' then
-            G.toggleSpell(tonumber(name:sub(6)))
+            G.castSpell(tonumber(name:sub(6)))
+            return
+        end
+        if name:sub(1, 4) == 'auto' then
+            G.toggleSpell(tonumber(name:sub(5)))
             return
         end
         if R and R.hand then
@@ -8633,12 +8704,16 @@ do
     function G.registerKeys()
         local trigger = CreateTrigger()
         KEY_HANDLES = {}
+        -- Reforged fires a key event only for the exact modifiers it was
+        -- registered with: every key is registered plain, with Shift and with Ctrl.
         for _, entry in ipairs(KEY_LIST) do
             local handle = _G['OSKEY_' .. entry[1]]
             if handle then
                 KEY_HANDLES[#KEY_HANDLES + 1] = {handle, entry[2]}
-                BlzTriggerRegisterPlayerKeyEvent(trigger, G.PLAYER, handle, 0, true)
-                BlzTriggerRegisterPlayerKeyEvent(trigger, G.PLAYER, handle, 0, false)
+                for _, meta in ipairs(META_KEYS) do
+                    BlzTriggerRegisterPlayerKeyEvent(trigger, G.PLAYER, handle, meta, true)
+                    BlzTriggerRegisterPlayerKeyEvent(trigger, G.PLAYER, handle, meta, false)
+                end
             end
         end
         TriggerAddAction(trigger, function()
