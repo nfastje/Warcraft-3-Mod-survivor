@@ -1,0 +1,279 @@
+# Build And Renderer Platforms
+
+## Build Profiles
+
+The Makefile has five independent build choices:
+
+| Variable | Values | Default | Contract |
+|---|---|---|---|
+| `BUILD` | `debug`, `release` | `debug` | `release` adds `-O2`; debug adds `-O0 -g` |
+| `COMPAT_WORKAROUNDS` | `0`, `1` | `1` | Enables explicitly gated compatibility workarounds, including RoC Entangle data recovery and the `AHad`→`BHad` aura visual mapping described in [Race Mechanics](games/warcraft-3/race-mechanics.md#race-specific-gold-mining) and [Aura Targets And Overlays](games/warcraft-3/aura-targets-and-overlays.md) |
+| `GL_BACKEND` | `gl`, `gles3` | `gl` | Desktop OpenGL 3.1, or Linux OpenGL ES 3.0 |
+| `MSAA` | `0`, `2`, `4`, `8` | `0` | Compile-time default framebuffer sample count |
+| `GLSL` | `120`, `140`, `150` | `140` | GLSL version for descriptor-based shaders (ignored when `GL_BACKEND=gles3`) |
+
+All configurations currently share `build/`, so clean before changing any build variable:
+
+```bash
+make clean
+make BUILD=release GL_BACKEND=gles3 MSAA=0 openwarcraft3
+```
+
+Set `COMPAT_WORKAROUNDS=0` to build without the gated compatibility paths. This
+does not disable ordinary old-format support. The variable accepts only `0` or
+`1`; leave it at its default to retain existing behavior.
+
+That is the recommended RG40XX build. Its Mali-G31 hardware supports OpenGL ES 3.2, while Mesa Panfrost exposes OpenGL ES 3.1 on G31. The runtime only requests ES 3.0. Confirm the firmware driver rather than assuming it from the GPU:
+
+```text
+GL_RENDERER: Mali-G31 (Panfrost)
+GL_VERSION: OpenGL ES 3.x ...
+```
+
+`llvmpipe` identifies software rendering. The GLES3 build is Linux-only; macOS, Windows, and OpenBSD retain desktop OpenGL.
+Release keeps assertions enabled: the JASS VM uses them for invariant diagnostics, while optimization is controlled independently.
+
+`common/shared.h` maps `strlcpy` and `strlcat` to project-local implementations on Linux and Windows. This is automatic and
+covers Linux systems whose libc predates those BSD APIs, including Ubuntu 22.04; no compatibility build flag is required.
+
+The first release profile used `-DNDEBUG` and exposed VM expressions inside `assert(...)`: indexed JASS assignments skipped both
+their index and value evaluation, then `jass_copy` read an unrelated stack entry during `G_ClientBegin`. Keep VM operations outside
+assertions. Diagnose this class with a bounded campaign launch; a crash report ending in
+`jass_copy -> jass_set_array_value -> jass_resumecoroutine` identifies the old failure.
+
+For an optimized desktop build with 4x coverage:
+
+```bash
+make clean
+make BUILD=release MSAA=4 openwarcraft3
+```
+
+## Flatpak Desktop Profile
+
+The Steam Deck/desktop Flatpak is documented separately in [Flatpak And Steam Deck Packaging](flatpak-steam-deck.md). It builds the existing Linux desktop-GL profile with:
+
+```bash
+make clean
+make BUILD=release GL_BACKEND=gl MSAA=0 openwarcraft3
+```
+
+The manifest installs the resulting `build/bin/openwarcraft3`, the six WC3 shared libraries from `build/lib/`, and the complete generated `build/share/` tree without changing their relative deployment contract. Retail Warcraft data remains outside the package and is selected through the XDG FileChooser portal.
+
+## GLSL Version Selection
+
+The `GLSL` variable sets which GLSL version string the descriptor-based shader system emits.  It has no effect when `GL_BACKEND=gles3` — that path always generates `#version 300 es`.
+
+| `GLSL=` | Preprocessor define | `#version` emitted | Keyword style |
+|---------|--------------------|--------------------|---------------|
+| `120` | `-DBZ_GLSL_120` | `#version 120` | `attribute` / `varying` / `texture2D` / `gl_FragColor` |
+| `140` *(default)* | *(none)* | `#version 140` | `in` / `out` / `texture` / `o_color` |
+| `150` | `-DBZ_GLSL_150` | `#version 150` | same as 140 |
+| *(when `gles3`)* | `-DBZ_GL_ES3` | `#version 300 es` | same as 140 + `precision highp float/int` prologue |
+
+GLSL 140 and 150 use identical declaration keywords; the `GLSL=150` choice only changes the `#version` line.  Use it when targeting a core profile context that requires at least 150 (e.g. macOS Core Profile which dropped the compatibility profile and requires ≥ 150).
+
+**Switching versions requires a clean build** because the version define bakes into compiled `.o` files:
+
+```bash
+make clean
+make GLSL=120 openwarcraft3        # legacy hardware / older drivers
+make clean
+make GLSL=150 openwarcraft3        # macOS Core Profile
+make clean
+make GL_BACKEND=gles3 openwarcraft3  # GLES3 (ignores GLSL=)
+```
+
+### Descriptor shader bodies and state
+
+Shader descriptors provide `vec4 vert()` and `vec4 frag()` bodies and call `texture()`.
+`R_BuildShaderDeclarations` generates uniform/attribute/varying declarations. `R_BuildShaderMain`
+wraps the bodies with the dialect's output variables; GLSL 120 gets the `texture2D` alias.
+Bodies do not need `GLSL_ATTR`, `GLSL_FRAGCOLOR`, or other dialect-token macros.
+GLSL 120 shader bodies must spell floating-point constructor and assignment literals with a decimal suffix;
+use `vec3(0.0, 0.0, 1.0)` and `pos.z = 0.0`, not integer literals that newer dialects implicitly convert.
+The fog-of-war raycast correction follows [upstream commit 52f2de0b](https://github.com/corepunch/open-realm/commit/52f2de0b20035c23fa36e6f32e88a0477d710b64).
+macOS core-profile contexts reject `#version 120` itself, so runtime validation of that dialect requires a
+compatibility-profile/Linux driver; macOS can still run the source-contract tests.
+
+`UNIFORM` entries address fields in a typed CPU value state; GL locations stay inside `SHADERPROG`.
+Populate the state, then call `R_ApplyShader` at the draw boundary. See
+[descriptor programs and typed state](architecture/model-shader.md#descriptor-programs-and-typed-state).
+`make test-renderer-model` verifies declaration generation and upload dispatch.
+
+## Game Compile-Time Selectors
+
+Each game build defines its game selector on every module and application translation unit: `WC3`, `WOW`, or `SC2`. Warcraft III uses `WC3_CFLAGS` for this just as the other games use `WOW_CFLAGS` and `SC2_CFLAGS`. Keep game-specific fields and network descriptors behind the matching selector only when all producers and consumers are compiled with that same game flag. In particular, a field added to `PLAYER` under `#ifdef WC3` must see `-DWC3` in `libgame`, `libjass`, renderer/UI modules, the client/server application unity build, and WC3 standalone tests; otherwise the game module and client disagree on the `PLAYER` layout and guarded client logic is silently omitted.
+
+## JASS Header Dependencies
+
+WC3's `libjass` directly includes game structs through `jass.h -> game/g_local.h`. Header changes must rebuild it even
+when no JASS source changes. `games/warcraft-3/game.mk:JASS_HEADERS` covers game/common/server/shared/client headers;
+`make test-jass-build` verifies the dependency using pretend-new header timestamps. A stale VM after the entity-state
+trim caused ESC to move cutscene units but skip local-player camera/UI cleanup; see
+[WC3 cinematics](games/warcraft-3/cinematics.md#debugging) for the reproduction and regression tests.
+
+## Texture Channel Order
+
+`COLOR32` is four **RGBA bytes** in engine code; BLP decoders retain their source BGRA order. The uploader receives a
+`TEXMIP` with an explicit `PIXEL_RGBA` or `PIXEL_BGRA` format. That describes memory, not the OS or GPU's storage.
+`R_InitTextureFormats()` runs once per GL context before loading textures; `r_bgra_internal` records the supported
+BGRA internal format (zero means BGRA must be converted). Every upload still uses `GL_UNSIGNED_BYTE`.
+
+| Context | BGRA internal / external format | RGBA source |
+|---|---|---|
+| Desktop GL, including a desktop API exposed by gl4es | RGBA / BGRA, original buffer | RGBA / RGBA, original buffer |
+| GLES with `GL_EXT_texture_format_BGRA8888` | BGRA_EXT / BGRA_EXT, original buffer | RGBA / RGBA, original buffer |
+| GLES with `GL_APPLE_texture_format_BGRA8888` | RGBA / BGRA_EXT, original buffer | RGBA / RGBA, original buffer |
+| GLES without either extension | Copy BGRA to RGBA, upload RGBA / RGBA, free copy | RGBA / RGBA, original buffer |
+
+EXT takes precedence when both extensions exist. The capability is derived from `GL_VERSION` and advertised extensions,
+not `__linux__`, GPU vendor, or CPU endian. The startup log prints `texture uploads RGBA=direct BGRA=direct` or
+`BGRA=CPU conversion to RGBA`, plus the selected internal format. Unsupported BGRA conversion preserves the caller's
+buffer. Null-data storage allocation needs no conversion. See the distinct format-pair requirements in the
+[EXT specification](https://registry.khronos.org/OpenGL/extensions/EXT/EXT_texture_format_BGRA8888.txt) and
+[APPLE specification](https://registry.khronos.org/OpenGL/extensions/APPLE/APPLE_texture_format_BGRA8888.txt).
+
+| Source | Format passed to uploader |
+|---|---|
+| BLP1 JPEG/palette; BLP2 palette/raw/DXT | BGRA; retain decoder output and upload directly when supported |
+| STB PNG/TGA/JPEG | RGBA; no intermediate BGRA copy |
+| PCX | RGBA; read palette RGB components into matching fields |
+| Generated pixels / SC2 terrain masks | RGBA; never compensate for platform in generators |
+| 32-bit uncompressed DDS | RGBA or BGRA from DDS channel masks; same common upload policy |
+| Compressed / 24-bit DDS | Existing separate compressed / RGB/BGR upload paths |
+
+The old uploader (Linux branch introduced in `572cfcc73`) interpreted all loaded BGRA image bytes as RGBA on Linux,
+but as BGRA elsewhere. M1 campaign logging captured BGRA upload bytes such as `(3,3,255,255)`. The OS conditional
+caused different colors from identical buffers. Merely changing its GL enum breaks RGBA-generated pixels; the source
+format must be explicit, and SC2's compensating desktop mask swizzle must be removed together.
+
+Independent corroboration: [open-realm b56a8618](https://github.com/sookyboo/open-realm/commit/b56a86180174943cc0b4132fb6b8d3d132b2fc46)
+fixes the same gl4es/PortMaster mismatch using separate RGBA/BGRA wrappers and a compile-time GLES conversion path.
+This tree uses one source-format-aware uploader and runtime capability detection, including GLES BGRA extensions.
+An earlier local revision normalized every BLP to RGBA; it has been superseded to avoid conversions where BGRA works.
+
+Reference checkout: `data/ioquake3`, upstream `ioquake/ioq3`, inspected commit
+`588393618dbc82e7207c21c6ddecca229944a03a`. `code/renderercommon/tr_image_tga.c:R_LoadTGA` converts source BGR into RGBA;
+`code/renderergl1/tr_image.c:Upload32` uploads RGBA without OS-dependent channel selection. Both designs keep the source
+bytes consistent with the API format; they differ in when conversion is needed.
+
+Verification: `make test-renderer-model` intercepts GL uploads. It emulates desktop GL, GLES EXT, GLES APPLE and plain
+GLES contexts, checks the exact internal/external pair, asymmetric R/B/alpha values, zero allocation for direct uploads,
+one allocation/free for converted BGRA, unchanged input memory, and no extension queries during uploads. BLP1 palette,
+BLP2 raw/palette/DXT, PCX and 32-bit DDS tests cover loader format declarations. `make test` includes this suite.
+Run bounded ROC/TFT, WoW and SC2 scenes after changes (see [scene workflow](rendering-scene-workflow.md)).
+
+For platform reports, collect OS, build flags (`GL_BACKEND`), startup `GL_VENDOR`/`GL_RENDERER`/`GL_VERSION`, the texture
+upload capability log, and an engine `+screenshot 10 +com_frame_limit 20` of the same scene. Ask whether textures,
+solid UI/vertex colors, or only screenshots are inverted. Do not introduce a global driver/OS swizzle toggle.
+Mac runtime checks and emulated capability tests do not substitute for Windows/Linux hardware validation.
+
+2026-08-26 verification: `make test` passed 5,250 assertions in 772 tests. All three games built, and bounded Human02
+ROC/TFT (including ESC), WoW character creation, and SC2 TRaynor01 runs completed on Apple M1. The capability log showed
+both source formats uploading directly; engine screenshots retained correct colors and WC3 gameplay camera/HUD cleanup.
+SC2 still reported missing DDS assets and an unloadable-texture warning, so its launch is a smoke check, not full asset QA.
+
+For Android SDK/emulator setup and remaining mobile bring-up work, see [Android bring-up](android.md).
+
+## API Floor
+
+The supported renderer floors are desktop OpenGL 3.1 and OpenGL ES 3.0. GLES3 shaders are generated from the same GLSL 1.40 bodies with a `#version 300 es` header and precision declarations.
+
+OpenGL 2.0 and OpenGL ES 2.0 are intentionally unsupported. The renderer relies on vertex-array objects, instanced drawing, vertex attribute divisors, and GLSL `in`/`out` syntax. More importantly, the shared MDX/M2/M3 skinning shader needs a sizeable matrix palette; ES2 guarantees too little vertex-uniform storage for the current renderer contract. Supporting ES2 would require a separate renderer design rather than version-string substitutions.
+
+The shared model shader keeps a fixed 128-matrix palette, emitted as literal `uBones[128]` from one C constant shared with
+CPU storage and uploads. There is no hardware-derived sizing or index clamp. Startup logs:
+
+```text
+Bone palette: 128 matrices fixed; shader compile/link validates support
+```
+
+Both shader compilation and program linking are checked. Failure prints the driver log and terminates with a nonzero exit;
+there is no unskinned shader fallback. See [shared model shader contracts](architecture/model-shader.md#bone-palette) for the
+regression, units, gl4es query caveat and tests. Fixed size does not make an insufficient backend support the shader;
+that requires a different palette transport or draw batching, not clamping bone indices.
+
+## MSAA And Alpha-Key Materials
+
+The build selects the alpha-key fragment shader at C compile time:
+
+- An MSAA build defines `BZ_USE_MSAA`, converts the alpha edge with `fwidth`/`smoothstep`, enables `GL_SAMPLE_ALPHA_TO_COVERAGE`, and retains depth writes.
+- An `MSAA=0` build compiles a hard alpha test (`discard` below `uAlphaCutoff`) and retains depth writes. It has no multisample bandwidth cost.
+
+MSAA is fixed at build time because the sample count is part of SDL context creation. There is no `r_msaa` cvar. Startup logs requested and active samples; `GL_SAMPLE_BUFFERS` is authoritative.
+
+## Video Modes
+
+Android uses the WC3 resolution popup for `r_render_scale` (100/75/67 percent), keeping
+the drawable, UI and input native while reducing large 3D views. Desktop keeps its
+existing fixed/native mode list. See [Android](android.md) for framebuffer and MSAA limits.
+
+`vid_mode` is a resolution-table index, not a window-style enum. The authoritative table is `common/video_modes.h` and is shared by client startup and the Warcraft III options menu. Mode 0 is 640x480 and is the safe default for the RG40XX display. Invalid indices resolve to mode 0 and the options menu applies changes through `vid_apply`. The Steam Deck's 1280x800 mode is appended to the table rather than inserted among the 1280-wide modes so archived numeric `vid_mode` values keep their existing meaning.
+
+Shared video policy is controlled separately from the fallback resolution index:
+
+- `vid_native 1` resolves the current SDL desktop resolution and uses it instead of `vid_mode`;
+- `vid_fullscreen 1` enables fullscreen; native + fullscreen uses `SDL_WINDOW_FULLSCREEN_DESKTOP`, avoiding a display-mode switch;
+- `vid_native 0` uses `vid_mode`; with fullscreen enabled the renderer requests an exact SDL fullscreen mode and falls back to a window if the requested display mode is unavailable;
+- `vid_hidden 1` suppresses native/fullscreen transitions so bounded hidden renderer tests retain their explicit logical size.
+
+The shared cvar defaults remain windowed/non-native so other games are unchanged. Warcraft III ships `vid_native 1`, `vid_fullscreen 1`, and `vid_mode 4`: a clean WC3 launch therefore fills the current desktop at native resolution (1280x800 on an undocked Steam Deck), while 1280x720 remains the widescreen fallback if native mode is disabled or desktop-mode discovery fails. WoW retains its existing `vid_mode 2` policy and SC2 retains its own setting. User config, autoexec, and command-line cvars can override these values.
+
+The WC3 Resolution popup appends a `Native` choice after all numbered modes. Choosing `Native` enables native fullscreen. Choosing a fixed resolution disables `vid_native` without renumbering the persisted `vid_mode` table; `vid_fullscreen` can still be controlled independently from the console/config.
+
+An SDL/X11 startup log has shown the requested native desktop mode and the immediately reported fullscreen window/drawable disagreeing (the drawable matched the desktop work area rather than the full mode). The exact window-manager timing is backend-dependent, so treat that as an observed startup mismatch rather than assuming every affected run follows the same transition sequence. The client forwards SDL window events that can change the drawable (`MOVED`, `RESIZED`, `SIZE_CHANGED`, and `DISPLAY_CHANGED` where supported) to the renderer by marking drawable state dirty. `R_BeginFrame()` performs one `SDL_GL_GetDrawableSize()` only when that flag is set, after the client has finished pumping events; multiple resize/move events therefore coalesce into one query. If the drawable changed, the renderer updates the cached drawable, full GL viewport, and full scissor before rendering. Startup and explicit `vid_apply` still refresh directly. Client/UI code already reads the SDL window size dynamically, so this prevents a later drawable correction from leaving renderer UI/scissor math on stale dimensions without adding a per-frame SDL query. The correction is logged as `Video: drawable size changed (window-event) ...`; if an affected run never emits that line, this specific drawable-cache mechanism was not the cause and the layout race needs separate investigation.
+
+The SDL display-mode list is opt-in with `-vid_modes` (or `+set vid_modes 1`). `Cvar_ApplyCommandLine` maps the flag
+to a non-archived cvar, which `R_Init` reads through `ri.CvarString` before enumerating modes. Normal startup skips
+both enumeration and its log; SDL/GL driver and drawable-size diagnostics remain. The old unconditional call
+enumerated 132 modes on the verification Mac. `vid_modes` controls logging; singular `vid_mode` selects resolution.
+
+Check WoW's shipped default without a saved config, then repeat with `-vid_modes` to see the list:
+
+```bash
+make openwow
+build/bin/openwow -data data/world-of-warcraft -config '' +menu_character_create +com_frame_limit 10
+build/bin/openwow -data data/world-of-warcraft -config '' -vid_modes +menu_character_create +com_frame_limit 10
+```
+
+`make test-commands` covers exact flag matching, disabled/enabled diagnostics, loading the actual WoW defaults,
+and an explicit resolution override. Runtime checks must cover logs with and without the flag in ROC/TFT, WoW and SC2.
+Verified on macOS: all eight 10-frame launches exited successfully; the list appeared only with `-vid_modes`.
+Those historical verification results predate native-fullscreen WC3 defaults: WoW still uses its configured 1024x768 window unless overridden, while WC3 now defaults to the current desktop resolution/fullscreen. SC2 retains its own configured policy.
+
+Use this bounded diagnostic after changing video or renderer setup:
+
+```bash
+build/bin/openwarcraft3 -data 'data/Warcraft III' +set vid_native 0 +set vid_fullscreen 0 +set vid_mode 0 +set r_stats 1 +com_frame_limit 100
+```
+
+Check `Drawable size`, `GL_RENDERER`, `GL_VERSION`, `MSAA`, `Bone palette`, and `[R_STATS]` in the log. SDL reports physical drawable pixels, so a 640x480 logical window is 1280x960 on a 2x Retina display; the RG40XX panel has no such high-DPI multiplier.
+
+## Authoritative References
+
+- [Arm Mali-G31 product support](https://support.arm.com/compute-ip/mali-g31)
+- [Mesa Panfrost hardware/API table](https://docs.mesa3d.org/drivers/panfrost.html)
+- [Anbernic RG40XX H specifications](https://anbernic.com/en-ca/products/rg40xx-h)
+
+## Native SDL2 on macOS
+
+Homebrew's `sdl2` alias can resolve to `sdl2-compat`, an SDL2 API implemented on SDL3. Inspect the actual symlink
+and dylib, not just the `-lSDL2` linker flag: `readlink /opt/homebrew/lib/libSDL2.dylib` and `sdl2-config --version`.
+For a native SDL2 environment, build the [official SDL2 release source](https://github.com/libsdl-org/SDL/releases/tag/release-2.32.10)
+with `SDL_SHARED=ON`, `SDL_STATIC=OFF`, and `SDL_TEST=OFF`, and pass its installation prefix to
+`make HOMEBREW_PREFIX=/path/to/sdl2-prefix`. Ordinary `brew install sdl2` can select the compatibility
+package again. Rebuild every engine/renderer/menu binary after replacing the dylib; old Mach-O install names can
+still point into the removed compatibility keg. No SDL2_image/net/ttf/mixer add-on is required by this engine build.
+
+### Headless MDX loader tests
+
+`make test-renderer-model test-renderer-shadows` runs the production MDX parser, geometry packing,
+and model cleanup with intercepted GL buffer/VAO calls in `tests/test_renderer_model.c`.
+The SPN fixture loads a real model through `R_LoadModelMDLX`; compiling the loader/buffer sources
+separately bypasses those intercepts and crashes in macOS `glGenBuffers` without a current context.
+Keep their test compilation inside the intercepted translation unit; production builds remain unchanged.
+The shadow target uses the same fixture sources with `USE_SHADOWMAPS`. Keep `tests/test_mdx_geoset.c`
+in its separate `test-mdx-geoset` target: it supplies independent renderer globals and stubs that conflict
+with the model fixture when linked together.
+Fatal shader tests intercept `Sys_Exit`, the renderer's termination boundary, so rejected compile/link
+cases can assert failure without terminating the test runner.

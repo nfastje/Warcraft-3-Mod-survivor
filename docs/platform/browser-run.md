@@ -1,0 +1,175 @@
+# Build and run OpenRealm Warcraft III in a browser
+
+> **Experimental:** use the native build for the best performance and stability.
+> The browser target is a real, statically linked engine build, but full runtime
+> compatibility is still under development. A long loading pause can look like
+> a freeze; allow a minute or more before concluding that startup failed.
+> Warcraft III save/load is unsupported in this browser build. Audio uses an
+> AudioWorklet after a user gesture and can underrun during loading stalls. On iPhone/iPad,
+> the launcher selects Safari's `playback` audio session so sound works with
+> the device's silent switch enabled (older Safari uses a silent looping media
+> element). This can pause music playing in other apps. If Safari interrupts
+> audio, return to the page and tap the game once to resume it.
+
+Safari's playback-session behavior is described in
+[WebKit's silent-mode issue](https://bugs.webkit.org/show_bug.cgi?id=237322#c6).
+The browser audio bridge keeps worklet registration separate from context
+resumption: `AudioContext.resume()` may remain pending during an interruption,
+so it must not hold the connection lock and block a new engine audio ring after
+shutdown/restart. If worklet registration finishes while the page is hidden,
+the ring may attach but playback stays suspended until the page returns.
+Hidden-page shortcut events also cannot unlock audio. The bridge regressions in
+`port/web/tests/ios-audio-session.test.cjs` cover these cases, registration retry,
+and detach during registration; they do not replace an audible check on an iOS
+device with the silent switch enabled.
+
+This guide builds the playable browser engine. `make web-warcraft3-foundation`
+builds a separate WebGL smoke test and does not run Warcraft III.
+
+## Requirements
+
+- Linux, Git, Python 3, Make, and a C build toolchain.
+- An activated Emscripten SDK (`emcc` on `PATH`).
+- Chrome or Edge recommended, with WebGL 2, OffscreenCanvas, OPFS and the Web
+  Locks API available.
+- Warcraft III game data that you are legally entitled to use. The project
+  does not distribute Blizzard archives.
+
+The browser must support cross-origin isolation for WebAssembly threads. The
+included server configures the required COOP/COEP headers. Use `localhost` or
+HTTPS; opening the HTML with `file://` will not work.
+
+## Build
+
+Install and activate Emscripten using the
+[Emscripten SDK instructions](https://emscripten.org/docs/getting_started/downloads.html),
+then build from the repository root:
+
+```sh
+source ~/emsdk/emsdk_env.sh
+make web-warcraft3-engine
+```
+
+The output is `build/web/engine/`. For an unoptimized debug build with symbols:
+
+```sh
+python3 port/web/build-engine.py --debug
+```
+
+That output is `build/web/engine-debug/`. If the build reports that
+`renderer/conchars_sysfont.h` is missing, generate the native font header first
+with `make font`, then rerun the browser build.
+
+## Serve and open the game
+
+Run the repository server from the project root:
+
+```sh
+python3 port/web/serve.py
+```
+
+It serves `build/web/engine/` at <http://127.0.0.1:8000/> and adds the
+cross-origin isolation headers needed for pthreads. To serve a debug build:
+
+```sh
+python3 port/web/serve.py --directory build/web/engine-debug
+```
+
+Open the URL in Chrome or Edge. The page checks browser-local game data and
+starts the engine when it finds a valid installation. On first use, import
+game data using the controls above the game canvas.
+
+## Import game data
+
+Select one or more `.iso`, `.mpq`, `.w3m` or `.w3x` files, then choose **Import
+selected files**. The page shows files it recognizes, their source and copy
+progress. The active installation is replaced only after a successful import;
+each import must include the base `War3.mpq` archive.
+
+- To install retail RoC and TFT together, select both discs in the same import.
+  Imports do not merge with the previous installation.
+- The importer recognizes named game archives and can identify some embedded
+  archives in installer `Setup.mpq` files. It extracts maps from one known RoC
+  installer layout. Unknown installer layouts are skipped or reported rather
+  than guessed.
+- The documented September 2002 demo ISO is supported separately. The page
+  labels it as a limited demo installation; do not combine it with retail ISOs
+  or standalone MPQs. Other demo disc layouts are not recognized.
+- Direct MPQ uploads and loose maps are supported. `Setup.mpq` is installer
+  data and is not installed as a game archive.
+
+Files remain in the browser's origin-private file system (OPFS); they are not
+uploaded. Keep using the same browser profile and URL, and avoid clearing site
+data if you want to keep the installation. The importer and launcher use Web
+Locks to protect active generations across tabs. Removal is available from the
+page, but cannot delete a generation that an open game tab is using.
+
+## Controls and troubleshooting
+
+The canvas uses the Warcraft III defaults bundled with the browser build:
+left-click selection, right-click smart orders and middle mouse button pan.
+The **Esc** overlay sends Escape to the game. The **Game** and **1–9**
+overlays open their shortcut lists on finger/pointer down: drag to an option and
+release to activate it, or release elsewhere to cancel. **Game** offers Quests
+(F9), Menu (F10), Allies (F11) and Chat (F12). In single-player F12 opens the
+Message Log; multiplayer chat-mode selection is not yet implemented. The
+browser F12 binding is isolated from the native Screenshot binding. The **1–9**
+list has three targets per row: its wide number recalls the group, **ctrl**
+assigns it and **shft** adds to it. Each action
+synthesizes a complete keyboard press/release (including any modifier) through
+the normal SDL canvas input route; it does not implement new game commands.
+The popups remain within the existing browser controls layer and cancel on
+pointer cancellation or lost page focus. They are also operable from a keyboard.
+The fullscreen control expands
+the game container, keeping both overlay controls visible; canvas resizing does
+not cover the controls. Interact with the page once to unlock browser audio.
+
+On a touchscreen, one-finger tap/drag uses the usual left-click UI/selection
+path, and two fingers pan the camera during gameplay. A mouse and keyboard
+remain usable on hybrid laptops. The game canvas disables browser touch
+scrolling/zooming; page controls outside it remain normal. See
+[SDL2 touch input](../architecture/touch-input.md) for the pointer ownership
+contract and physical-device verification limits.
+
+If the page says cross-origin isolation is unavailable, use the included
+`port/web/serve.py` server and verify in DevTools:
+
+```js
+crossOriginIsolated // true
+typeof SharedArrayBuffer // "function"
+```
+
+If it reports missing or invalid game data, check that the import completed,
+that `War3.mpq` was selected or found on disc, and that the page is being opened
+from the same origin where the data was imported. To try again, select the
+required base and expansion sources together and re-import.
+
+If startup remains on a loading screen, wait before treating it as a failure.
+Browser rendering and asset loading can be slow; audio may underrun during long
+stalls. Save/load is not available in the browser build. Some maps and campaign
+flows may still fail because the engine and browser filesystem path have not
+been verified across all retail game data.
+
+## Current capabilities and limits
+
+The browser target statically links the engine, renders through WebGL 2,
+embeds Warcraft III default configuration, imports supported media into OPFS,
+and mounts the selected generation through WasmFS. The page includes local
+installer status, detected archives, import cancellation/removal, persistent
+Escape and fullscreen controls during fullscreen and canvas resizing, and
+AudioWorklet playback.
+
+Run the dependency-free browser tests from the repository root with:
+
+```sh
+node --test port/web/tests/*.test.cjs
+```
+
+These tests cover ISO parsing, synthetic archive imports, UI and launcher
+behavior. They do not establish compatibility with every retail disc, map,
+browser/device combination or a complete real-data playthrough. Use the native
+application when reliability or performance matters.
+
+For implementation details, see [Browser platform](browser.md),
+[Browser filesystem](browser-filesystem.md), and
+[Browser ISO import](browser-iso9660.md).

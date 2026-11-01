@@ -1,0 +1,1199 @@
+# Warcraft III Save/Load
+
+## Status slot indexes
+
+`unitState_t.timed_status_update_mask` indexes `statuses[]` slots with
+`level && timestamp`; `unitState_t.status_occupied_mask` indexes all occupied
+slots, including permanent statuses. Bit `MAX_UNIT_STATUSES` in the timed mask
+validates both indexes. An invalid index makes `G_UnitStatusLevel()` scan all
+slots, preserving correctness before the first update and immediately after
+load. `unit_updatestatuses()` rebuilds both masks from authoritative status
+records; status add/remove/refresh paths maintain them together. Raw/direct
+status edits must call `unit_status_invalidate_update_mask()`.
+
+Both fields are `F_IGNORE` / `FIELD_RUNTIME` in the unit-state serializer, so
+they are not saved. Status records and simulation-clock deadlines remain
+authoritative. Since `unitState_t` uses field-based serialization, adding these
+runtime-only fields does not change the save format version.
+
+## Contract
+
+The WC3 game module owns save/load. `GetGameAPI()` exposes `SaveGame` and `LoadGame` callbacks through `server/game.h`. Player-facing menu saves continue to use `gi.SavePath`; untrusted JASS `SaveGame` and `LoadGame` are resolved through `gi.ScriptSavePath` into a **separate engine-owned session sandbox**. Scripted save and load requests are deferred to VM-safe/session boundaries (see Scripted zone saves below).
+
+`WriteGame()` writes the current game state to a versioned binary file. The file contains:
+
+- `W3SV` magic, the current save format version, canonical map path, the current `sizeof(edict_t)`, entity count, client count, script identity, and native-handle registry counts;
+- level frame/time, authoritative Warcraft time-of-day state, map-global camera bounds, and started/script-started flags;
+- each client `GAMECLIENT` state, including its `PLAYER` state, JASS settings and dynamically sized `SetPlayerAbilityAvailable` rawcode list, runtime removed/result-presentation state, researched tech, text storage, camera values, messages, and HUD caches;
+- each camera target as an entity index;
+- the quest and quest-item graph's strings and status flags;
+- the fixed point-order waypoint edict ring and its circular allocation cursor;
+- one used flag per entity slot and a raw `edict_t` block for used slots;
+- sparse lifecycle records for all 29 component pools and ten direct edict pools, written after the edicts, with per-pool counts and owning-edict indexes;
+- basic attack projectiles retain their launch-time attack type and owner incarnation, and fixed-point artillery projectiles retain their launch-time attack type and splash profile, in the serialized edict; attack cooldowns persist as simulation-time deadlines and keep elapsing across order changes;
+- group membership, trigger enabled state, timer state, weather-effect registry state, unread gameplay events, and a semantic JASS VM snapshot;
+- a `W3OK` commit footer and a checksum over the complete preceding payload. Since version 74 the checksum folds native 64-bit words into four FNV-style lanes. The previous byte-wise FNV-1a dominated save/load time at about 6 MB per file.
+
+`WriteGame()` removes the destination when any record or footer write fails. `ReadGame()` validates the commit footer, checksum, format, script identity, and quest/group/trigger/timer/event registry counts before mutating clients or entities. A truncated or rejected partial write therefore cannot become a loadable artifact or clear the live world. A header mismatch names the failing field and prints saved versus live counts; do not treat a generic `header mismatch` line as complete.
+Quest objects and items are restored in place so the running JASS VM's light handles keep their object identity. Events use `MAX_EVENTS` fixed slots, quests use `MAX_QUESTS` slots, and each quest owns `MAX_QUESTITEMS` item slots; `inuse` marks lifecycle state without moving live pointers during removal. Event references use physical slot IDs, so retired region-event slots may leave holes; the loader checks that a referenced slot is in use instead of assuming active slots form a dense prefix. Map startup can recreate a region registration that the saved state had removed, and the saved event table restores that removal. Quest state is restored from its fixed slots even when the pre-load active quest count differs. Loading completely reloads the saved map first, then applies state.
+
+The versioned layout retains the authoritative `level.timeofday` record and game-state event condition fields (`state`, `limitop`, `limitval`) and the client removal/pending-result fields used by victory/defeat presentation. Quest and event records are written by the recursive field schema. Counted descriptors write the count followed by the array prefix. Since version 13 the dynamic JASS group registry is written immediately after the level-field stream: every handle ordinal through `level.num_groups` writes `ggroup_t.inuse`, `num_units`, and that many `F_EDICT` indexes. Inactive holes remain serialized so higher live handle ordinals do not shift. Version 14 adds `GAMEEVENT.value`, the scalar callback payload used by research events, and pairs it with JASS snapshot format 3 so a sleeping callback preserves `JASSCONTEXT.eventValue` across save/load. Version 17 adds `GAMEEVENT.point` / `has_point` and pairs it with JASS snapshot format 4 so point-target spell response context survives unread event queues and yielded trigger coroutines. Version 60 appends a disabled-ability count and that many rawcodes after each client record and camera-target index. The list stores `SetPlayerAbilityAvailable(..., false)` state; capacity and pointer remain runtime allocations. Version 90 adds the inline Warcraft player-score counters to `gameClient_t`, so completed training/construction, kills, gathered resources/upkeep, food maxima, item acquisition, and mercenary hires survive save/load. The exact-version reader rejects version 89 and earlier rather than migrating their shorter client layout.
+
+### Save compatibility policy
+
+Save compatibility is deliberately unsupported. Load only the current format version and serialized layout, and reject older or otherwise mismatched saves with a diagnostic. Bump the format version when the serialized layout, callback identity, or meaning changes, including changes that leave `sizeof(edict_t)` unchanged. Do not retain legacy layouts, migration defaults, compatibility aliases, or optional extension records.
+
+Version 90 serializes current and default Warcraft III game difficulty as
+independent `level.setup` fields. This preserves a temporarily reduced current
+difficulty across save/load, without reapplying the archived campaign preference
+or overwriting the original default. Version 89 saves are rejected by the
+existing exact-version check. `wc3_save.current_and_default_difficulty_round_trip_independently`
+exercises Normal / Hard and Insane / Easy snapshots. The transient per-map
+restart/ChangeLevel override is session-only and is never persisted.
+
+Version 89 retains the selected entity and its `spawn_time` for ability-owned
+entity cursors that execute as point spells. A pending Kaboom approach saves
+its `S_SpellTargetApproachThink` callback, `goalentity`, owner and channel
+incarnations through the existing serializer. It resumes following the target
+after load rather than casting at a frozen click position. Earlier saves are
+rejected because this changes the meaning of point-spell approach state.
+`wc3_spell.self_destruct_entity_target_survives_save_load` exercises the live
+pending approach in ROC/TFT map state, then moves the restored target and
+advances the real scheduler through detonation.
+
+The server's map-selection read checks both the format version and entity size before reloading a map. The state reader applies the same guards, validates the existing checksum and reference domains, and requires the current payload to end at the commit footer.
+
+Version 40 added the region registry and region/event context. Its rejection of version 39 saves was intentional; later versions follow the same exact-match policy.
+
+Version 71 persists local Team Resources collapse state in addition to multiboard display suppression by client slot from version 70. Older saves are rejected, following the normal no-migration policy.
+
+Version 72 adds `edict_t.aura_effect_role`, the stable source/recipient identity
+of Devotion and Unholy Aura presentation edicts. The role is serialized as
+`F_INT` beside `summon_ability`; cache rebuilds use it even after a custom aura
+alias has been removed. Version 71 and earlier saves are rejected. The custom
+aura removal tests save both live effects, clear the runtime cache, restore,
+and remove the skill while a second provider continues supplying the glow.
+See [Aura Targets And Overlays](aura-targets-and-overlays.md).
+
+Version 75 includes the persistent `edict_t.ignore_alarm` per-unit flag and rejects version 74 saves. The existing `wc3_save.round_trip_edict_and_player_state` suite now checks suppression survives a save/load.
+
+Version 76 persists texttag presentation readiness and slot generations, alongside the existing text and unit anchor. The `wc3_save.texttag_presentation_state_round_trips` regression checks those fields and the anchor survive save/load; version 75 saves are rejected.
+
+Version 77 persists Wisp tree egress ownership and its local exit target.
+
+Version 78 changes the cinematic portrait byte to a presence flag and stores the complete model index in the existing 16-bit player stat array. Version 77 saves are rejected; the loader does not migrate old portrait state.
+
+Version 74 changes only the footer checksum to the word-wise `SaveChecksum`. Save and load streams also use a 1 MB stdio buffer. Version 73 and earlier saves are rejected.
+
+Version 67 adds `construction_t.duration_ms` so autonomous item-created Tiny Structures resume using their ability-authored build duration, independently of the unit's normal build time. Exact-version readers reject older layouts. `wc3_save.tiny_construction_round_trips_in_roc_and_tft_map_state` covers the `CONSTRUCTION_TINY` type, mid-progress `duration_ms`, and the building's self-linked `build` pointer in both archive variants.
+
+Version 65 makes delayed ability-edict identity snapshots mandatory for owner/target-bound thinkers. Pocket Factory, Graveyard/Exhume production, Stasis Trap, Divine Shield, and Lightning Shield persist `channel->owner_spawn_time` (and Lightning Shield `target_spawn_time`) so a recycled edict slot cannot inherit an older delayed effect. Version 64 saves are rejected rather than loading those thinkers without generation guards.
+
+Version 64 removes redundant Sacrifice/Polymorph `active` and destructable `initialized` fields. Their pool pointer represents ownership directly; Polymorph death releases its inverse record while keeping death presentation. Version 63 saves are rejected because those serialized pool layouts changed.
+
+Version 63 removes the redundant construction `active` flag: the record exists only during construction and is released on completion or stop. Version 62 saves are rejected because the serialized construction layout changed.
+
+Version 62 introduced serialization that writes the complete allocated record for every lifecycle pool, including scalar fields that have no fixup descriptor. Edict pool pointers are cleared from the raw edict record. The loader allocates fresh slots and fixes `F_EDICT` references after all entity records exist. It rejects duplicate owners, inactive owners, out-of-range indexes and invalid pool counts. Version 61's partial field streams and omitted pools cannot be loaded. See [pooled entity state](pooled-entity-state.md) for allocation and access rules.
+
+Version 59 adds Stop guard movement state to the entity record: `guard_position` and one `guard_state` enum (`NONE`, `IDLE`, `COMBAT`, or `RETURNING`). The exact-version guard rejects earlier saves because their entity records lack these fields.
+
+Version 41 persists region and region-event handle generations and exhaustion state. This keeps each recycled handle's `GetHandleId` unique during a session and stable across save/load. The exact-version guard rejects version 40 saves as well as earlier versions.
+
+Version 42 persists the unit incarnation (`spawn_time`) captured by unit-bound trigger registrations. This prevents an event from attaching to a different unit when the original edict slot is reused after load. The exact-version guard rejects version 41 saves as well as earlier versions.
+
+Version 32 adds `edict_t.permanent_health_bonus`, the persistent ledger for
+research-owned maximum-life effects such as `UpgradeData.slk` `rhpx`. The field
+is serialized explicitly and the version/`sizeof(edict_t)` guard rejects older
+records rather than allowing shifted edict state. Hero stat recomputation uses
+the restored ledger so a later Strength change cannot erase an upgrade-owned
+maximum-health bonus.
+
+Version 33 adds `edict_t.projectile_reflected` for basic attack missiles. A
+Defend-returned projectile can therefore be saved while travelling back to its
+source without becoming eligible for a second reflection after load. The field
+is part of the normal edict schema and follows the existing `goalentity` /
+`owner` entity-index relocation contract.
+
+The version 3 layout expands the fixed-size `GAMECLIENT` cinematic camera state with target Z offset, near/far clipping planes, and target-controller orientation inheritance. Version 2 saves are rejected because the raw client record layout changed; this prevents older saves from being misread with shifted fields.
+
+The version 4 layout packs the portrait-present flag, `team`, `color`, and `race` as consecutive `BYTE`s (one `NFT_LONG` on the wire); the full portrait model index travels in the existing 16-bit player stat array. Older saves recover portrait indices that fit in the legacy byte. It also drops `PLAYER.camera_bounds` (the rectangle lives on `level`) and writes `level.camera_bounds` with the other level clocks. Version 3 saves are rejected because both the raw `GAMECLIENT` record and the level stream changed.
+
+Version 10 extends the authoritative `level.timeofday` record with the Warsmash-style temporary/false clock (`hour`, `minute`,
+remaining simulation ticks, active, initialized), so a loaded save cannot silently resume the canonical day/night cycle while a saved
+Moonstone-style override should still be active. Version 11 adds per-slot JASS group lifecycle state so destroyed group slots can be safely recycled and restored. Version 12 expands the raw `GAMECLIENT` snapshot with semantic Warcraft music state (map/default selection, current source, start/seek position, pause state, and music/thematic volumes); version 36 extends that state with session identity and persisted thematic restoration. Version 13 replaces the fixed inline group array with a growable stable-pointer registry and serializes that registry separately, so v12 and earlier saves are rejected rather than being interpreted with the wrong level layout. Version 15 accompanies the natural-creep sleep edict fields. Version 16 adds `level.environment_fog.active` and `.defaults` so scripted distance mist and the `ResetTerrainFog` target survive save/load.
+Version 17 accompanies the WC3 `edict_t` vertex-colour fields used by `SetUnitVertexColor`; the changed edict size and format version reject older records instead of interpreting shifted state.
+Version 17 also adds dedicated per-unit `abilitycooldowns[]` records so active ability cooldown windows survive save/load without sharing the timed buff/status array. Spell point response context in queued events and the matching JASS snapshot state are part of the same version. Version 18 adds the per-unit Polymorph restoration record (source ability/buff, selected form, original model/scale/movement speed, and active flag), paired with the already-persistent timed buff so an active morph restores correctly after load.
+Version 19 adds the ability-owned per-unit Raven Form takeoff state (`fly_height`, rise start/duration, and rise phase) so a save taken during the authored post-morph ascent cannot restore with an invalid altitude transition. `raven_fields` explicitly serializes those four scalar fields; no new edict pointers are introduced.
+Version 20 adds race-specific construction lifecycle state and an explicit `F_EDICT` fixup for `construction.worker`; v19 saves are rejected rather than interpreting the expanded raw edict record.
+Version 21 adds `mineoverlay.parent` and `acolyte_mine.mine` `F_EDICT` fixups plus overlay income timing/index and Acolyte slot/generation state. The original `Agld` edict remains the finite resource owner for Haunted/Entangled overlays, so those relationships must survive load rather than being reconstructed from proximity.
+Version 22 adds neutral-shop stock state: global item/unit slot capacities plus each shop edict's initialized item-stock entries, current counts, and absolute start/replenish deadlines. `stock_fields` bounds `item_count` by `MAX_SHOP_STOCK`; the deadlines use the restored simulation clock, so partially elapsed restock timers resume without rebasing. The expanded `edict_t` layout and format version reject older records instead of interpreting shifted state.
+Version 23 adds the fixed TimerDialog registry. Each live slot persists its timer association, title/colour presentation state, and client visibility mask; non-null JASS `timerdialog` values snapshot as stable slot indexes. Layout payloads remain transient, so load invalidates the timer-dialog HUD cache and republishes restored state on the next frame. See [Timer Dialogs And Mission Countdowns](timer-dialogs.md).
+Version 24 adds the fixed leaderboard registry, ordered item/style/color state, per-player leaderboard assignment indexes, per-client display masks, and stable JASS `leaderboard` handle IDs. Leaderboard layout payloads remain transient and are republished after load. See [Leaderboards And Counted Objective HUDs](leaderboards.md).
+Version 28 extends neutral-shop persistence with initialized `Sellunits` stock entries, current counts, and absolute start/replenish deadlines. `stock_fields` bounds both `item_count` and `unit_count` by `MAX_SHOP_STOCK`, so a partially replenished Mercenary Camp resumes against the restored simulation clock without reconstructing stock from map time. See [Neutral Shops And Mercenary Camps](neutral-shops.md).
+Version 29 adds each neutral-shop stock entry's effective `maximum`. Runtime `AddItemToStock` / `AddUnitToStock` overrides can differ
+from the object-data maximum, so both item merchants and Mercenary Camps restore that explicit cap instead of recomputing it from SLK
+or map object data. The current count and absolute replenishment deadline continue to restore against the saved simulation clock.
+Version 30 persists the fixed multiboard, multiboard-item, and texttag registries (including `texttag.unit` via `F_EDICT`) so JASS
+scoreboard/floating-text handles relocate by slot index. See [Multiboard And TextTag](multiboard-and-texttag.md).
+Version 31 adds the fixed hashtable registry (`level.hashtables[MAX_HASHTABLES]`) plus a typed nested-handle entry payload written
+after edicts (not after groups). Nested `unit`/`item` slots call `G_LoadJassHandle` only once restored edict `inuse` bits exist;
+`SV_Map` runs `main()` first, so a pre-edict resolve would see the map baseline and drop script-created units. Each `HT_HANDLE`
+slot stores the JASS type name; nested types without a host domain (`location`, `lightning`, `image`, `ubersplat`, …) restore as
+null with a one-shot stderr diagnostic. JSVM snapshot format remains version 4 — hashtable globals relocate through the host codec,
+not an owned-payload allowlist entry. See [DotA Custom-Map Playability](dota-map-playability.md#hashtable-saveload).
+Version 31 also persists the Human construction `build_preview` edict reference, so an accepted build order's owner-only
+Construction Site Indicator survives save/load as an entity-index fixup rather than a process pointer. Older saves are rejected
+by the exact-version guard.
+Version 32 persists whether the map's `config()` phase completed before `main()`, so a restored map does not rerun that setup phase
+or lose the lifecycle state that gates authored player/team/color initialization. It also adds the WC3-owned mutable Blight cell plane immediately after the level-field stream and adds each unit's `blight_growth` alias/current-radius/next-update state to the raw `edict_t` contract. Load requires the saved Blight byte count to exactly match the freshly initialized map Blight grid and restores it before edicts/JASS state, so `SetBlight*` changes and `Abli` expansion progress survive without being reconstructed from nearby buildings. See [Blight](blight.md). Version 31 saves are rejected by the exact-version guard.
+
+Version 32 also adds `edict_s.permanent_invisibility_reveal_until`, the authoritative server-time deadline used by `Apiv` Permanent Invisibility after spawn, attack, or spell-cast reveal. The field is serialized explicitly in `edict_fields[]`; the expanded `edict_t` size and version reject older layouts rather than interpreting shifted entity state.
+
+Version 33 adds the level-owned Warcraft lightning presentation registry (`next_lightning_id` plus active `LIGHTNINGEFFECT` records). Source/target positions, rawcode, colour, start time and optional expiration survive a save, so a live Chain Lightning bolt does not disappear or restart its lifetime merely because the game was reloaded.
+
+Version 34 adds the `lightning` JASS handle domain. `AddLightning` and `AddLightningEx` handles now point at the same stable lightning registry slots used by ability presentation, so movement, colour, destruction, hashtable entries, and active script globals preserve their identity across save/load.
+
+Version 35 adds entity attachment and spawn-generation fields to each lightning registry slot. Ability bolts save their source/target edict indexes and spawn times, then restore those references through the normal `F_EDICT` fixup path. Each outgoing datagram refreshes attached endpoints from the current unit origins; if an edict was freed or its spawn generation changed, that endpoint is detached instead of following a reused slot. The saved coordinates remain available for explicitly positioned JASS lightning.
+
+Version 36 expands the raw `GAMECLIENT` Warcraft music state with per-client session serials/IDs and the thematic restore descriptor. The session ID is the authoritative lifecycle identity echoed by client `music_selected` / `music_finished` acknowledgements, replacing playlist-text/index hashes that could disagree after random initial selection, missing-track fallback, or comma/semicolon normalization. The restore descriptor persists the interrupted source, selected track, pause state, and the client-observed audible millisecond snapshot reported when thematic music begins, so a save taken during a theme can restore the underlying ordinary music session after reload. Version 35 saves are rejected by the exact-version guard because the raw client record grew.
+
+Version 37 adds the timer callback generation/pending fields, expands the bounded event ring, and adds the Undead Sacrifice queue relationship. A queued Shade carries `edict_s.sacrifice` and `sacrifice.worker` is relocated through an `F_EDICT` fixup; the saved worker generation and hidden/paused restoration scalars remain in the raw edict record. This lets a save taken while an Acolyte is hidden inside a Sacrificial Pit resume the same production item and cancel/complete safely instead of retaining a process pointer. Version 36 saves are rejected by the exact-version guard because the timer schema and event ring layout changed. See [Undead Sacrifice](sacrifice.md).
+
+Save format version 45 adds Way Gate destination/activation values and explicit approach state. `orders->waygate_target` and `orders->waygate_goal` use the ordinary `F_EDICT` relocation contract, `waygate_target_spawn_time` guards the target incarnation, and the behavior continues to use the existing `currentmove` `F_MMOVE` relocation. The exact version guard rejects version 44 saves independently of the `sizeof(edict_t)` header check. See [Way Gates](way-gates.md).
+
+Ability-owned temporary summons rely on three already-persisted parts of the edict contract together: the `owner` `F_EDICT` fixup, the scalar `summon_ability` alias, and the raw timed-status record carrying `BTLF` (`timestamp`/`duration_ms`). The save regression suite covers that combined lifecycle so a loaded temporary summon keeps both provenance and its remaining timed-life state; no additional save-format field is required.
+
+Corpse lifecycle (`AI_CORPSE_UNRAISABLE`, `AI_CORPSE_NO_DECAY`, `AI_CORPSE_RESERVED`, and `AI_CORPSE_IN_CARGO`) rides in the already-persisted `aiflags` edict field, while the existing persisted `cargo.units[]`/`cargo.count` links the Meat Wagon to the actual stored corpse edicts. Thus cargo occupancy, corpse identity, decay move/timer, and active corpse-consumer reservation survive save/load without a new format field. Graveyard `Agyd` production uses an ordinary owner-linked thinker plus `freetime`; `graveyard_think` is in the saved callback roster, so its cadence resumes without a format change. See [Corpse Lifecycle, Cannibalize, and Raise Dead](corpse-mechanics.md).
+
+
+Groups use reusable stable ordinals in a growable pointer table: `level.num_groups` is the high-water mark while `level.group_capacity` is transient allocation capacity. Each `ggroup_t` is separately allocated so growing the pointer table never moves a live handle. `DestroyGroup` releases an ordinal for later reuse; `GroupClear` only clears membership. Live JASS group handles serialize as stable ordinal indexes. See [JASS Groups](jass-groups.md).
+
+Groups, timers, triggers, and event handlers may grow after `main()`. The header accepts a save that has *at least* as many of those objects as the freshly initialized map, then `RestoreRegistrySlots()` allocates the extras. A live count higher than the save still rejects. Quests remain an exact match because they are restored in place.
+
+The current format is process-independent for entity relationships: `F_EDICT` fields and camera targets are written as entity indexes and resolved back to `g_edicts[index]` by `ReadGame()`. Before raw edict records replace the freshly loaded map baseline, `ReadGame()` clears the baseline spatial tree and then links each restored entity exactly once. Client pointers are restored from player slots, player names from inline JASS name storage, and map-player rows from the loaded map plus `PLAYER.number`. Malformed headers, truncated records, and entity indexes reject the load; client pointers are never read from the file as addresses.
+
+Groups, triggers, timers, and events use deterministic handle ordinals. Group objects are dynamically allocated behind a growable pointer table; membership is stored as entity indexes and each serialized record persists `inuse` so destroyed holes remain distinguishable from live empty groups. Each trigger stores its disabled flag plus action/condition function names so a trigger created after `main()` still has its callbacks after load. Timers preserve their handler name, duration, remaining time, periodic/paused/running flags, and resume relative to the load time. Timer callbacks and timer-expire trigger actions enter the normal coroutine queue and retain `GetExpiredTimer()` context.
+
+Weather effects use the same stable-slot rule. `level.weather_effects[MAX_WEATHER_EFFECTS]`, `next_weather_id`, each slot's rawcode, rectangle, enabled flag, and renderer handle ID are serialized as level state. A non-null JASS `weathereffect` snapshots as its fixed slot index, so globals keep pointer identity across load. `ReadGame()` restores the registry before the JASS snapshot and replays it to connected clients; reconnecting clients also receive the same full weather sync from `G_ClientBegin()`. See [Weather](weather.md).
+
+Event handler registrations store type, subject entity index, trigger index, timer index, region, range, game-state ID, `limitop`, and limit value. The extra condition fields preserve `TriggerRegisterGameStateEvent` time-of-day registrations across save/load. The unread portion of the bounded gameplay event ring preserves event type, subject/source entity indexes, scalar value, optional point target, and the target registration ordinal. Consumed queue entries are not saved. Loads reject queue overflow and unresolved entity or registration IDs.
+
+
+## Difficulty and zone transition boundary
+
+The campaign preference is an archived client cvar; a running mission owns
+independent `level.setup.difficulty` / `level.setup.default_difficulty` values.
+The one-shot state used by a scripted RestartGame or ChangeLevel is **not** part
+of a game-save snapshot. `SaveGame` followed by `ChangeLevel` stages a transition
+only after a successful `WriteGame`, whereas `LoadGame` must restore its own
+serialized values. Difficulty level-field serialization and the associated save
+format version change remain follow-up work; see [Game difficulty](game-difficulty.md).
+
+## JASS Snapshot
+
+The embedded snapshot starts with `JSVM`, snapshot format version 6, a program-identity hash, mutable-global count, and sleeping-coroutine count. It stores:
+
+- mutable scalar globals and sparse array entries;
+- integer, real, boolean, string, code, null, and supported typed-handle values;
+- shared-handle identity by stable native-domain ID;
+- VM-owned handle identity and bounded payloads for sounds, camera setups, rects, locations, forces, game caches, regions, fog modifiers, and converted value objects;
+- `boolexpr`, `conditionfunc`, and `filterfunc` handles by semantic JASS function name;
+- sleeping coroutine frames as function/block token ordinals, locals, operand stack values, wake delay, and event context, including scalar and optional point spell response data.
+
+The snapshot never writes parser pointers, dictionary links, refcount addresses, stack pointers, or `jmp_buf`. Code values and coroutine PCs resolve against the already-parsed program after the identity hash matches. Handles relocate through game-owned codecs for entities (`unit`, `widget`, `destructable`, `item`, `effect`), players, quests, quest items, events, triggers, groups, timers, timer dialogs, leaderboards, multiboards, texttags, hashtables, and weather effects. Safe VM-owned handles serialize their payload and snapshot-local identity so aliases remain aliases after load. Unsupported non-null handle types reject the save with a diagnostic instead of writing an address or silently dropping the value.
+
+Handle encoding dispatches value handles, VM-owned payloads, and function handles before consulting the game host. A failed host lookup means null only for host-owned native domains, such as a removed unit; applying that rule to VM-owned handles would silently replace valid sounds, camera setups, rects, locations, forces, and game caches with null.
+
+JASS sound handle payloads remain part of the VM snapshot, but one-shot presentation parameters currently maintained by the game host (`SetSoundVolume`, `SetSoundPosition`, and `AttachSoundToUnit`) are transient. `ReadGame()` clears that host-side table before reconstructed sound handles can reuse an old pointer value. Scripts that need those presentation parameters after restore must set them again before the next `StartSound`; continuous playback state is not yet serialized.
+
+Point-order waypoints follow Quake II's body-queue/TRAIL pattern: 256 classless, collisionless, `SVF_NOCLIENT` edicts are reserved before map entities and recycled as a ring. Its base, count, and cursor live in serialized level state. Consequently `goalentity` and other waypoint references use the ordinary `F_EDICT` index relocation path; there is only one entity pointer address domain.
+
+Saving is allowed only at a VM safe point. `jass_writesnapshot()` rejects a request while a synchronous JASS call or coroutine is actively executing. Yielded `TriggerSleepAction` coroutines are safe and resume from their saved semantic PC after load.
+
+## Field Table
+
+`games/warcraft-3/game/g_save.c` keeps `edict_fields[]`, `client_fields[]` and
+per-pool schemas synchronized with their declarations. Fixed edict/client records
+and each owned pool record are copied as blocks; `field_t` describes pointer fixups,
+content serialization and process-owned exclusions. Unit statuses, cooldowns, Hero
+progression and weapon profiles live in the entity-owned `unit_state` pool.
+Status source pointers require nested fixups; scalar timestamps and incarnation
+IDs persist with the raw pool record. Animation request/property strings are
+interned content and use `F_ANIMSTRING`, never raw process addresses.
+
+`F` and `TF` describe struct-tag and typedef-backed members. For example, inventory
+slots use `TF(inventory_t, slots, F_EDICT, MAX_INVENTORY, FIELD_NONE)`.
+
+- Add every persistent `edict_t` entity pointer to `fields[]` as `F_EDICT`, including array elements and nested fields.
+- Use `TFC(type, field, kind, capacity, count_field)` for a bounded typedef-backed array. The descriptor writes and restores `count_field` itself, then processes that many elements; do not map the count separately.
+- Persistent movement defaults are part of that rule: Attack-Move/Patrol waypoints and `orders->follow_target` must be encoded as entity indexes rather than raw pointers.
+- Do not add process-owned pointers such as path textures, metadata rows, or animations. `WriteEdict()` clears `FIELD_RUNTIME` pointers and `ReadEdict()` rebinds class metadata; spatial links are rebuilt with `gi.LinkEntity`.
+- Edict C callbacks (`think`, `stand`, `birth`, `prethink`, `die`, `pain`) use `F_CFUNCTION`, not `F_IGNORE`. Add every production assignment to the versioned `save_cfunctions[]` roster in `g_save.c`; an unrostered pointer fails the save instead of writing an address.
+- JASS `F_FUNCTION` remains name-string identity for timers and triggers. Do not overload it with C symbols.
+- Add remaining process-owned edict or client pointers to the corresponding runtime-field table so the fixed record copy cannot write an address into the save file.
+- When adding a new pointer or changing an existing edict field, update the table and the round-trip test together. A raw pointer omitted from the table can write an address into the save file.
+- Keep the table sentinel `{ NULL, 0, 0, 0 }`; all serializer loops stop at `field->name == NULL`.
+
+This follows the Quake 2 `g_save.c` pattern while avoiding Quake 2's old global pointer addresses and unbounded save stream.
+
+## Native Usage
+
+JASS save names are relative virtual names. Patch 1 accepts simple flat slots, `Blizzard\Zones\<filename>`, and `Blizzard\<slot>\<filename>` only. Each player-selected map session uses a private `saves/campaigns/<playthrough-id>/live/` root. Authored JASS `ChangeLevel`/`RestartGame` actions preserve that root; player-started maps and returning to the menu rotate it. A named manual save binds an immutable checkpoint of its script-save scope after the save commits. Loading that save clones the checkpoint into a fresh scope before loading the map; an unbound or invalid save receives a fresh empty scope. Map scripts never receive or choose the physical root, and cannot enumerate or manipulate manual saves or saves from other sessions. Disk-backed `gamecache-*.orcgc` sidecars are likewise under the private `cache/` directory, which JASS save-copy/delete natives cannot address. Valid names use ASCII letters/digits, dot, dash, underscore and internal spaces, at most 64 characters per component. Device names, trailing dots, absolute paths, traversal and extra directory depth are rejected. Existing `.sav` suffixes are preserved, otherwise `.sav` is appended consistently for scripted saves. These rules apply to `SaveGameExists`, `CopySaveGame`, `RenameSaveDirectory`, and `RemoveSaveDirectory` too. Directory operations are limited to `Blizzard\<slot>` and `Blizzard\Zones`; they cannot target the sandbox root or the `Blizzard` parent. Filesystem copying on POSIX uses directory-relative no-follow file descriptors and temporary replacement; the Windows implementation rejects reparse points.
+
+**Patch 5:** player-created manual saves now receive a private, engine-owned
+binding to their script-save session after the actual save file is committed.
+A player-selected load checks that binding against the manual save contents
+and reopens the previously authorized script scope before constructing the
+restored map. This also works across application restarts. A save without a
+valid binding uses a fresh private scope, preserving isolation but not older
+zone snapshots. Bindings are inaccessible to JASS and do not grant access to
+other manual saves. The fingerprint is a stale-file check, not a cryptographic
+signature against an attacker modifying the user's local save files. This patch established save-scope recovery but did not complete Rexxar travel; later deferred save/load and event-dispatch patches implement that path. Full cross-map rollback after a failed restore and broader storage quotas remain separate limitations.
+
+```jass
+call SaveGame("chapter-01")
+call LoadGame("chapter-01", false)
+```
+
+`LoadGame` completely reloads the saved map before restoring state. The initialized map must have the same JASS program. `main()` recreates the baseline native registries; objects created later in gameplay are allocated from the save and filled from trigger/event/timer records. The JASS natives resolve paths through `gi.ScriptSavePath` (the menu uses `FS_SavePath()`).
+
+## Save/load trigger callbacks (Patch 2)
+
+The game module registers `EVENT_GAME_SAVE` and `EVENT_GAME_LOADED` with the
+normal event registry; `GetSaveBasicFilename` is registered as a transient
+string native. ESC-menu named/quick saves and the server `save` command call
+the optional `game_export.BeforeSaveGame(name)` hook before `WriteGame`, so
+synchronous map save handlers can copy Rexxar zone backups into
+`Blizzard\<slot>` within the authorized script sandbox. The server calls
+`game_export.AfterLoadGame(name)` when normal named-load restoration succeeds,
+giving map handlers a chance to restore zone backups. Scripted zone restores
+use a separate `AfterScriptLoadGame(name)` callback after the zone snapshot is
+applied. Events
+run through the JASS event dispatcher and scheduler with the logical basename
+available only during this callback. Normal save requests abort on a pre-save
+JASS error or exhausted event queue, instead of taking a knowingly incomplete
+snapshot. If an event action sleeps, its later continuation cannot use this
+transient name; maps should perform file-copy actions synchronously.
+
+### Scripted saved-zone restoration (Patch 4)
+
+`LoadGame(name, doScoreScreen)` now requests a deferred `scriptload`
+operation rather than calling `ReadGame()` within JASS. The request uses
+`ScriptSaveExists` to confirm that its destination is in the current private
+script scope. At the next frame boundary the client/server revalidate the
+name, obtain the map from the saved-game checksum/header (`GetSaveMap`),
+load that map via `SV_Map`, and restore its snapshot via the standard game
+module `LoadGame` callback. This preserves the script scope: unlike a
+player-selected manual load, it **does not** call `FS_ResetScriptSaveScope`.
+`LoadGame` without an earlier `SaveGame` is also deferred to the frame
+boundary.
+
+`SaveAndLoadGameBJ(source, destination, false)` issues `SaveGame` followed
+by `LoadGame` from the same callback. A single transient request now writes
+and commits the source snapshot at the safe point **before** queuing the
+scripted load; invalid, duplicate, or missing destinations and failed source
+saves cannot dispatch the load. Pending operations are excluded from the
+serialized snapshot. `doScoreScreen` remains presentation-only and is not
+implemented.
+
+Normal named player save restoration dispatches `EVENT_GAME_LOADED` without
+`MAP_RELOADED`. After a scripted zone snapshot is applied, the server dispatches
+the same event with `MAP_RELOADED` temporarily set. This runs the map's
+return handler (including transition-cache hero import) while keeping its
+ordinary user-load handler gated off; that handler copies backed-up zone files
+into `Blizzard/Zones` and could overwrite newer snapshots. The flag is restored
+after synchronous event dispatch. Normal named-load behavior is unchanged.
+
+**Remaining limitations:** the map identity/footer are checked before changing
+maps, but a damaged payload can still fail during `ReadGame` after replacement.
+The server's existing fallback loads a clean destination map, not the previous
+source map. A fully atomic cross-map rollback remains subsequent work.
+The later named-save checkpoint work addresses scope recovery across restarts
+and isolation of disk game caches between manual slots. As with Patch 3, this patch is designed for local session
+transitions; verify dedicated-server handling separately.
+
+### Deferred JASS saves and conditional ChangeLevel (Patch 3)
+
+The JASS `SaveGame` native no longer calls the serializer from its active
+callback. It validates the name through the restricted `ScriptSavePath` import
+and records one transient pending request. At the end of the WC3 simulation
+frame, after the active JASS stack has unwound, `G_FlushScriptSave` calls
+`WriteGame`. If JASS issued `ChangeLevel` after `SaveGame` in the same frame,
+that level change is submitted only after the source save succeeds. Failed,
+invalid, or duplicate scripted save requests cancel the dependent transition.
+The pending request is **not serialized** into a saved zone, so restoring the
+source cannot replay its outgoing map change. A standalone scripted save is
+written at the same safe point without switching maps.
+
+All WC3 full-game writes now use a private temporary file in the target
+directory, flush the completed checksum/footer, then replace the destination
+on success. A failed serializer or I/O operation leaves a previously committed
+save in place. POSIX uses a same-directory atomic rename; Windows uses a
+replace-existing move. This does not add an application-wide disk quota or
+protect against unrelated privileged processes mutating files concurrently.
+
+**Patch 3 scope:** Scripted `LoadGame` was deliberately rejected instead of
+calling `ReadGame` within an active JASS frame. Patch 4 subsequently routes it
+through the cross-map server loader and keeps the active script namespace.
+Scripted zone saves are distinct from the player's named manual save events:
+`EVENT_GAME_SAVE` is still dispatched only by the normal save entry points.
+Patches 5 and 5a subsequently add restart-safe campaign scope bindings and
+per-named-slot checkpoints; Rexxar hero-import fidelity remains unverified. This deferred mechanism captures the state at the simulation safe point,
+not necessarily the exact JASS instruction where `SaveGame` was called.
+
+
+
+## Quake 2 Lifecycle
+
+`data/Quake-2-master` is the reference. WC3 cannot copy the files 1:1 (one map, embedded JASS instead of cross-level `game.ssv`), but the steps must stay in Q2 order.
+
+| Q2 | This engine |
+| --- | --- |
+| `SV_Savegame_f` → `WriteServerFile` / `WriteGame` / `WriteLevel` | `save` → `ge->SaveGame` / `WriteGame` |
+| `SV_Loadgame_f` → `ReadServerFile` / `ReadGame` | save header supplies the map path |
+| `CL_Changing_f`: plaque + `ca_connected` | `CL_BeginLoadingMap` + `CL_RestartRefresh` |
+| `SV_Map(..., loadgame)` → `SpawnEntities`, two `RunFrame`s, `SV_CreateBaseline` | `SV_Map` → `G_LoadMap` / `G_StartScripts` (`main()`) |
+| `SV_CheckForSavegame`: `SV_ClearWorld` then `ReadLevel` | `SV_LoadGame` calls `ReadGame` immediately (`gi.ClearWorld` then edicts) |
+| `SV_Map` ends with `reconnect`; already-connected client sends `new` | `SV_Map` sends loopback `client_connect`; do **not** `CL_Connect` |
+| `CL_ParseServerData` → `CL_ClearState` zeros `refresh_prepped` and `image_precache` | `CL_RestartRefresh` zeros prepped flags plus `cl.pics` / `cl.fonts` / `cl.models` because same-map load never changes `CS_WORLD` |
+
+Q2 `ReadLevel` states the contract we hit: SpawnEntities has already run the same way as at save time, the server has cleared world links, then edicts are overwritten and `linkentity` rebuilds the tree. Skipping `ClearWorld` left the baseline area lists pointing at the same edict addresses and hung in `SV_AreaEdicts_r`. Calling `CL_Connect` after that `client_connect` wiped the client netchan and raced the handshake — Q2 never does that on load.
+
+`F_EDICT` / `F_CLIENT` still convert pointers to indexes only at the save boundary. Q2 `F_FUNCTION` stored a process-relative code offset. We split that job: JASS `F_FUNCTION` stores script names, and edict C callbacks use `F_CFUNCTION` (see [C Callbacks](#c-callbacks-f_cfunction)).
+
+## JASS Handles Stay Pointers at Runtime
+
+Do not replace JASS VM `HANDLE` / `LPCJASSFUNC` / `LPEDICT` fields with integers. Q2 keeps `edict_t *` and `think` pointers in memory and remaps them in `WriteField1` / `ReadField`. The VM should do the same.
+
+- Host-owned natives (`unit`, `widget`, `item`, `player`, `quest`, `trigger`, `group`, `timer`, `timerdialog`, `event`, `weathereffect`) snapshot as stable ordinals through `G_SaveJassHandle` / `G_LoadJassHandle`.
+- Stale host-owned handles are normalized to null at the save boundary, including handles retained by yielded coroutine/event contexts. Removed units can outlive their edict only as stale JASS pointers; they must not make an otherwise valid save fail. A missing host codec or snapshot I/O failure remains fatal.
+- VM-owned payloads (sounds, rects, locations, forces, game caches) snapshot identity plus bytes.
+- `code` / trigger actions snapshot as function names, the analog of Q2 `F_FUNCTION` without a relocated code segment.
+
+Integer handle tables inside the interpreter would duplicate that field table, break light-handle aliasing, and still need a remap step on load. When a new pointer appears on `edict_t` or a native object, add a field/codec entry; do not change the VM's in-memory representation.
+
+HUD FDF trees cache `CS_IMAGES` / `CS_FONTS` slots. Those tables die with `memset(&sv)` in `SV_Map`. `G_LoadMap` memsets the single `hud` accumulator and clears the FDF pool; serialize then re-`ImageIndex`es from names. See [HUD Media Lifetime](hud-media.md).
+
+Version 85 snapshots gameplay fog-of-war exploration per player. On load, `explored` is restored, `visible` is cleared so living revealers can recompute it, and fog rows are dirtied for client resynchronization. The packed-mask build also rebuilds its packed explored mask. Version 84 and earlier saves are rejected by the format-version check. Bot runtime, alliances, and cinematic filter are not part of the save. Environmental distance-fog state is serialized since version 16. Client message storage is part of `GAMECLIENT`, but transient presentation lifetimes are not reconstructed. Edict C callbacks persist through `F_CFUNCTION` (see [C Callbacks](#c-callbacks-f_cfunction)); the active `umove_t` is restored by `F_MMOVE` relocation (see [Active Behavior](#active-behavior-f_mmove)). Menu callbacks are code pointers and are reset on load; restoring an active targeting/build submenu requires a semantic menu-state enum rather than raw function addresses. There is no backwards-compatible reader for v12 or earlier saves. Version 9 packs C-callback roster indexes into the edict blob that version 8 zeroed and rebound from class data. Version 10 adds the fixed weather-effect registry, weather handle IDs, the `weathereffect` JASS handle codec, and false-time state to the level stream; after load the authoritative weather set is replayed to connected clients. Version 11 adds per-slot JASS group lifecycle state so destroyed group slots can be safely recycled and restored. Version 12 expands `GAMECLIENT` with semantic music state; the client decoder itself is not serialized, so music resumes from the last JASS-defined start/seek position rather than an exact continuously advancing decoder head. Version 13 serializes the dynamically sized JASS group registry outside the fixed level-field schema while preserving group-handle ordinals. The current music session fields expand the raw `GAMECLIENT` record and therefore use save format version 36; version 35 saves are rejected by the exact-version guard.
+
+The checksum and header preflight protect normal partial/corrupt-file and wrong-map failures before mutation. Record-level semantic validation later in the stream is not fully transactional; do not treat save files as untrusted input until native records are decoded into temporary state before commit.
+
+The saved quest graph occupies fixed `MAX_QUESTS` slots. `header.quests` is diagnostic metadata only: load restores the saved quest slots, so the number of active quests created during map startup may differ from the snapshot. This avoids rejecting valid same-map saves when startup has already recreated a different active quest set. `wc3_save.active_quest_count_may_differ_before_restore` covers this case.
+
+Persisted model configstring indexes are invalidated when the map is reloaded. After the lifecycle pools are restored, `ReadGame` runs `RebindEntityModels` on every classed edict to re-register each index from its stable object-data path: an item's `s.model` from `ItemData.file`; a unit's `s.model` from `UnitUI.modelFile`, or from the morph form's `UnitUI.modelFile` while the Polymorph component is attached, in which case its `original_model` is re-registered from the unit's own `UnitUI.modelFile`; and `attack1/attack2.projectile.model` from `UnitProfile.attack[n].art` for missile and artillery weapons. The `wc3_save.*_reregistered_after_load` and `polymorphed_unit_rebinds_form_and_original_models_after_load` tests substitute a per-path model-index callback to verify each restored index was registered from the expected path.
+
+`wc3_save.fog_exploration_round_trips_and_visibility_restarts_clear` checks that exploration survives, transient visibility clears, dirty rows request resynchronization, and (when compiled) packed masks match the byte grids.
+
+## Simulation Clock Continuity
+
+`level.time` is the only clock the game may read. Game code calls `G_Time()` (an inline read of
+`level.time`); it must not call `gi.GetTime()` directly, because spell-rank parameters named `level`
+shadow the global in several skill functions and would silently pick up the wrong symbol.
+
+The server owns the simulation clock, following Quake II's `sv.time` model. `SV_Map` resets the
+per-level server state, so `ReadGame` restores the saved time through the generic
+`gi.SetGameTime(time)` import before the next server frame. `sv.framenum` is deliberately not
+restored: it indexes the snapshot delta ring (`client->frames[sv.framenum & UPDATE_MASK]`) and is
+process state, so rewinding it would desynchronise a connected client. `G_RunFrame` then reads the
+authoritative server clock:
+
+```c
+level.time = gi.GetTime();
+```
+
+Every persisted absolute deadline lives in this clock: `edict_s.spawn_time`, `edict_s.freetime`,
+`edict_s.route->time`, `heroabilitystatus_t.timestamp`, client `camera.start_time` /
+`message.end_time` / `cinematic_end_time`, and `level.cinefilter`. A save taken at `level.time = 20800`
+must restore the server clock to `20800`; otherwise every deadline would sit ~20.7 s in the future and
+units would stall waiting for cooldowns that already elapsed. Symptom seen in the field:
+everything stands frozen while one script-controlled unit walks off to a stale waypoint goal.
+
+Do not "fix" this by re-basing individual subsystems at load (the older per-timer
+`started = gi.GetTime(); timeout = remaining` rebase). Restoring the server tick covers every
+deadline; a per-subsystem rebase silently misses the edict and client-presentation deadlines.
+
+JASS timers deliberately hold **no** clock-absolute state. `gtimer_s` stores `duration` plus a
+`remaining` countdown that `G_RunTimers` decrements by `FRAMETIME` each frame, so a timer reloads
+with exactly the time it had left and needs no rebase at all. Prefer this shape for any new
+persisted deadline.
+
+Regression test: `wc3_save.load_restores_server_clock_onto_saved_time` in
+`games/warcraft-3/game/tests/t_game.c`.
+
+## Hero walk / save / load
+
+The serializer already round-trips edict pointers, Hero skill slots, runtime
+ability lists, and inventory items. The gameplay contract a player notices is
+stronger: a Hero that has walked away from spawn must restore that location
+together with learned skills and carried items.
+
+CI covers that contract without retail maps in
+`wc3_save.walking_hero_round_trips_abilities_inventory_origin`
+(`games/warcraft-3/game/tests/t_hero_saveload.c`). The test learns two Paladin
+skills, inserts two charged items, issues `unit_issueorder(..., "move", ...)`,
+steps until origin changes while `currentmove` is still `walk`, then
+`WriteGame`/`ReadGame` and checks origin, `unit_state->ranks[]`, `unit_state->overrides.added[]`,
+inventory class/charges, and that one more walk think still advances.
+`wc3_save.hero_audit_*` drives `G_HeroSaveLoadAuditFrame` for hidden-first-Hero,
+paused/cinematic wait, and dest-snap retries. The audit saves through
+`gi.SavePath("hero-saveload-audit")`, a fixed slot name; the in-engine test
+fixture redirects `gi.SavePath` into the per-process `Test_TempPath` directory
+because parallel `make test` shards otherwise share one per-user `saves/` file
+and a sibling shard's `WriteGame` can land between this process's save and
+reload (the hidden-first-Hero test then restored the sibling's walking Hero).
+
+Campaign maps are a local diagnostic, not `make test`. Arm the production
+binary with `wc3_hero_saveload_audit=1`; after `G_LoadMap` the game module waits
+for a live Hero, issues a short walk, saves, reloads through `WriteGame`/
+`ReadGame`, and prints `HERO_SAVELOAD` lines. Isolated per-map processes:
+
+```sh
+make audit-wc3-hero-saveload
+make audit-wc3-hero-saveload WC3_HERO_SAVELOAD_ARGS='--map Human02.w3m --jobs 1'
+make test-wc3-hero-saveload-audit
+```
+
+Reports land in `build/wc3-hero-saveload-audit/`. `no_hero` is typical for
+credits and some Rexxar sub-areas; it is not a serializer failure. This path
+does not call `SV_Map` reconnect; it restores onto the already-loaded map, which
+is the same game-module boundary the CI test uses.
+
+The walker must not start during intro cinematic. HumanX03 (Hkal dungeon
+pocket), NightElfX01 (Maiev intro start), and OrcX03a (Rexxar intro cliff)
+used to issue `move` before Intro_Cleanup teleported the player Hero.
+HumanX06Finale picked hidden Kil'jaeden `N000` first. The audit now skips
+`RF_HIDDEN`, waits for `!paused` and non-cinematic UI (with a timeout fallback
+for finales that stay cinematic), and re-issues if cleanup teleports mid-walk.
+
+`unit_issueorder("move")` returning true does not mean the snapped dest left
+the cell; ClosestPathable can fold an 80-unit click back onto the stand-in
+cell, then the first think arrives immediately (`stand`, origin unchanged).
+The walker retries 80/160/256/512 and eight directions until `goalentity` XY
+actually leaves.
+
+Do not teach `skip_cutscene` to unpause, fire ESC skip, or end cinematic; JASS
+cleanup owns that. Close-note: tracked by
+[#438](https://github.com/corepunch/open-realm/issues/438).
+
+Manual cheats (`sv_cheats 1`): `hero dump` prints the same snapshot line, and
+`hero walk [dx dy]` issues a move order from the selected Hero. See
+[Campaign Map Audit](map-audit.md) for the sibling startup smoke sweep.
+
+## Active Behavior (`F_MMOVE`)
+
+`edict_s.currentmove` is the running `umove_t` state machine. `monster_think` returns immediately
+when it is NULL, so a unit that loads without it does not move, stand, animate, or advance its order
+queue — the whole world stands frozen while scripted units walk off to stale goals.
+
+Quake II solves this with `F_MMOVE` and we copy it exactly: every `umove_t` is a file-scope static in
+`libgame`, so the pointer is saved as a signed byte offset from an anchor symbol in the same data
+segment (`mmove_reloc` there, `umove_reloc` here) and re-added on load.
+
+We add one guard Q2 does not have. A save written by a different build would decode to a wild
+pointer, so the unused upper half of the 8-byte pointer field carries an FNV hash of the move's
+animation name; `ReadField` range-checks the offset and compares the hash before dereferencing, and
+fails the load loudly on a mismatch rather than resuming with a corrupt behavior.
+
+`animation` stays a runtime field: `M_MoveFrame` already rebuilds it via `unit_setmove` when it finds
+a NULL animation, so `currentmove` is the only pointer that has to survive.
+
+## C Callbacks (`F_CFUNCTION`)
+
+`F_FUNCTION` is JASS-only: timers and triggers store `jass_functionname` / `jass_functionbyname` strings.
+Edict C callbacks cannot use that path; `monster_think`, `G_EffectThink`, and `blight_mine_think` are
+C symbols, not JASS names.
+
+`F_CFUNCTION` is the Q2 analog for those pointers. `WriteField1` looks the pointer up in
+`save_cfunctions[]` and packs a 1-based roster index plus an FNV name hash into the 8-byte pointer
+slot of the memcpy'd edict blob (same packing shape as `F_MMOVE`). `ReadField` restores the function
+from that index after the hash matches. NULL stays 0/0. An unrostered pointer fails `WriteGame` with
+`C callback %p is not in the save roster`; a bad index or hash fails the load instead of installing
+a wild pointer.
+
+The roster indexes and callback names are part of the format. Bump the save version if their identity changes; keep the roster's names aligned with the current implementation instead of retaining old-name aliases. Production assignments retained
+by version 10:
+`monster_think`, `blight_mine_think`, `G_FreeEdict`, `G_EffectThink`, `G_EffectValidateTarget`,
+`blizzard_think`, `flame_strike_tick`, `siphon_mana_think`, `unit_stand`/`unit_birth`/`unit_die`,
+and `tree_stand`/`tree_birth`/`tree_pain`/`tree_die`. `idle`/`move`/`run`/`attack` have no
+production assignments yet; they still go through `F_CFUNCTION` so a later assignment must be
+rostered.
+
+The shared targeted-spell approach callback `S_SpellTargetApproachThink` is also in the roster.
+`wc3_items.soul_gem_pending_approach_round_trips_save` verifies that a Soul Gem cast waiting to
+walk into range preserves both this callback and its originating item across save/load. Point-target
+spells use the same callback and retain their clicked destination while walking into range.
+
+`ReadEdict()` rebinds SLK table rows with `G_BindEntityData` but does **not** call
+`G_BindEntityRuntime`. Class defaults would clobber a saved `blight_mine_think`, `G_EffectThink`,
+or a valid NULL `think` (finished effect). `G_BindEntityRuntime` remains the spawn/test helper that
+installs class-owned unit/destructable callbacks when those pointers have not been assigned yet.
+
+Regression tests: `wc3_save.round_trip_entity_c_callbacks` and `wc3_save.rejects_unknown_c_callback`.
+
+## In-Game ESC Menu Named Saves
+
+`hud/hud_menu.c` binds Blizzard's `EscMenuSaveGamePanel.fdf` and uses the normal writable save directory for single-player named
+saves. The transient-window bridge now carries two pieces of client-owned control state needed by that panel:
+
+- `FT_EDITBOX` / `FT_GLUEEDITBOX` serialize as `uiEditBox_t` with a stable FDF control ID and maximum length; the client retains the
+  typed text/cursor while the modal is open. Retained edit state is resolved only against the currently prepared transient-window
+  layout because frame numbers are local to each layout; the same numeric frame in the gameplay HUD must not inherit the save name.
+- `FT_LISTBOX` retains selected-row and scroll state locally. A row may be encoded as `display\thidden-value`; drawing stops at the
+  tab while command placeholder expansion returns the hidden value.
+
+Button commands may contain `{ControlName}` placeholders. `client/cl_window.c` expands them at activation from the current edit/list
+state and escapes `"` / `\` before forwarding the command. The WC3 panel therefore uses:
+
+```text
+Esc -> Save Game -> type name -> menu_save_named "{SaveGameFileEditBox}"
+Esc -> Load Game -> select row -> menu_load_named "{<transient list control name>}"
+```
+
+The list payload may name an edit target. Selecting a saved-game row copies its hidden basename into `SaveGameFileEditBox`, allowing
+the same Save action to overwrite that slot or save an amended name.
+
+The gameplay Save/Load dialog serializes Blizzard's `EscMenuSaveGamePanel` directly. Its `FileListFrame` is an intentionally empty
+placeholder populated by retail code, so OpenRealm instantiates the authored `MapListBox` backdrop and scrollbar there and adds a
+native `FT_LISTBOX` state child constrained by its anchors. The panel is hosted inside the shared Esc-menu backdrop, and the FDF remains
+the geometry source of truth. The transient client owns list selection, scrolling, and edit state while the
+modal is open; gameplay code only fills data, visibility, enable state, and click handlers.
+
+New saves are prefilled with the active map file basename (without extension) and a filesystem/command-safe local timestamp (`NightElf04_YYYY-MM-DD_HH-MM-SS`). If the map path is unavailable, the timestamp alone is used. The value remains an ordinary
+editable transient edit box, so the player can replace or amend it before saving.
+
+Each time Save Game opens, the authored `SaveGameFileEditBox`
+the edit box is initialized from the current map basename and local wall-clock time as `MapName_YYYY-MM-DD_HH-MM-SS`; the value is only a default and remains editable before
+submission. The timestamp avoids characters rejected by the save-path validator.
+
+`FS_ListSaves()` enumerates `.sav` basenames under the directory derived by `FS_SavePath()` and returns a double-NUL list ordered by
+filesystem modification time, newest first. Equal modification times fall back to a case-insensitive basename sort for deterministic
+ordering. This keeps recently written or overwritten saves at the top even when the player replaces the timestamp with a custom name.
+The list is exposed to game modules through `gi.ListSaves`. The WC3 menu only publishes entries for which `G_GetSaveMap()` can read a map identity.
+Spaces within manually entered save names are preserved in save enumeration and quoted load commands; tests cover directory enumeration and quoted command parsing. The basename `quick` is rendered as `Quick Save`, preserving the F6/console quick slot alongside named files.
+
+Menu-entered names are trimmed, optional `.sav` is removed, length is capped to `CMDARG_LEN - 1`, and path/control characters are
+rejected. `Quick Save` normalizes back to `quick`. Saving an existing basename currently overwrites it immediately. Delete removes the
+selected basename through the filesystem import and replaces the same unique Save window, preserving modal ownership while refreshing
+the rows. The authored overwrite-confirm panel remains disabled.
+
+Loading remains a session boundary. `menu_load_named` calls `G_RequestLoadGameNamed()`, which queues `MenuAction("load", name)`. The
+client resolves the saved map and calls `SV_LoadGame()` on the following frame, after the gameplay-window callback has returned. Do
+not call `ReadGame()` directly from an in-game button callback.
+
+The client forwards a `close_window_command` suffix before releasing the modal window, so a save request can execute while
+`client_s.modal_flags` still contains the ESC-menu owner. Treat `modal_flags` and `quest_dialog_open` as `FIELD_RUNTIME`: they describe
+live client-window ownership, not simulation state. Persisting them can reload a game as paused even though no transient window exists.
+The serializer round-trip test asserts that both fields clear on load.
+
+## Console Usage
+
+The server registers Quake 2-style `save` and `load` commands. Save names are relative to the writable save directory and cannot contain path separators:
+
+```sh
+build/bin/openwarcraft3 -data "data/Warcraft III" +map "Maps/(2)Rivercross.w3m" +wait +save chapter-01
+```
+
+Open the in-game console with the backtick/tilde key and enter `save chapter-01` or `load chapter-01`. For command-line save diagnostics, place `+wait` between the map and `+save` commands so map initialization and `main()` have created the authoritative native registries first. A load invocation can omit `+map`:
+
+```sh
+build/bin/openwarcraft3 -data "data/Warcraft III" +load chapter-01
+```
+
+`FS_SavePath()` resolves saves below the same per-user directory as config: `$XDG_DATA_HOME/warcraft-3/saves/<name>.sav` on Unix when `XDG_DATA_HOME` is set to an absolute path, otherwise `~/.local/share/warcraft-3/saves/<name>.sav`; Windows uses `%APPDATA%/warcraft-3/saves/<name>.sav`. macOS follows the Unix XDG/fallback rule rather than `~/Library/Application Support`. If no writable per-user data directory is available, config and saves fall back to `share/warcraft-3/config/` and `share/warcraft-3/saves/`. The save filename may not contain `/` or `\`.
+
+The ESC Save Game and Load Game panels issue the named `menu_save_named` / `menu_load_named` commands described above. The shipped
+config still binds `F6` to `save quick`; `F9` remains the quest log shortcut. Console `save <name>` / `load <name>` continue to use the
+same files, so a named ESC-menu save is also loadable from the console and vice versa.
+
+## Verification
+
+Run the serializer round trip against both ROC and TFT test environments:
+
+```sh
+make test-wc3-engine WC3_PATTERN='wc3_save.*'
+```
+
+The tests cover entity/client fields and pointer fixups, waypoint targets, quests, mutable globals and sparse arrays, code values, native and VM-owned handle aliases/payloads, function handles, group membership, trigger state, paused/periodic timers, direct and trigger timer callbacks, `GetExpiredTimer`, sleeping-coroutine resume, checksum rejection, script mismatch, native-registry mismatch, and triggers/events created after `main()`. Corruption and preflight tests assert that rejection leaves representative live entity state unchanged. ROC and TFT are both executed by the target.
+
+A listen-server Human02 save/load is not covered by dedicated `+test`. Confirm it with a command-buffer replay that reaches `ca_active` after `load quick`:
+
+```sh
+# wait-lines omitted; keep enough frames for main() plus a few seconds of play
+build/bin/openwarcraft3 -data "data/Warcraft III" -roc -com_fast_forward \
+  +set vid_hidden 1 +set r_norefresh 1 \
+  +map "Maps/Campaign/Human02.w3m" +exec /tmp/save-load.cfg +com_frame_limit 250
+```
+
+The load succeeded when the log contains `WC3 LoadGame: restored` and a later `CL_SendBegin` for the same map, and does **not** contain `header mismatch` or `restoring map baseline`. Repeat with `-tft`.
+
+
+
+### Save/Load menu diagnostics
+
+For targeted diagnostics without changing normal behavior, use:
+
+```text
++set wc3_save_menu_debug 1
++set ui_window_debug 1
+```
+
+`wc3_save_menu_debug 1` logs each `.sav` basename discovered for the in-game
+Save/Load dialog, the resolved path/map header, filtering reasons, the final
+list payload, timestamp default, and Save/Load button enable state. Level `2`
+additionally logs the authored list control, font metrics, and dimensions.
+
+`ui_window_debug 1` logs the transient client payload for edit boxes and
+listboxes, including control IDs, screen rectangles, font resources, item
+height, selected row, and the text received over the wire. Level `2` additionally
+logs live `SDL_TEXTINPUT` updates and the current client-side edit value/cursor.
+
+For the two current presentation failures, capture both sets of lines beginning
+with `WC3_SAVE_MENU` and `UI_WINDOW_DEBUG` after opening Save, typing a few
+characters, then opening Load.
+
+### Authored Save/Load presentation
+
+The gameplay Save/Load dialog uses `EscMenuSaveGamePanel.fdf` without C-side geometry overrides. Its save-name edit field receives a
+fresh editable date/time default whenever Save Game opens.
+
+Transient edit-box text is client-local while the modal is open. Rendering of the authored edit-box text child must therefore read the
+live client edit value, not only the server-supplied initial `STRING` text, so edits remain visible before submission.
+
+The authored selectable list supports wheel, arrow, track, and thumb-drag scrolling by saved-game row.
+
+## Natural creep sleep state
+
+Save format version 15 accompanies the `edict_t` layout addition for natural creep sleep. The mutable `can_sleep` and
+`sleeping` booleans are ordinary persistent edict scalars. A sleeping unit's `currentmove` continues to use the existing
+`F_MMOVE` relocation path, so the static creep-sleep move is restored through the same ASLR-safe contract as other unit moves.
+See [Neutral Creep Sleep](creep-sleep.md).
+
+## Environmental distance fog
+
+Save format version 16 adds the active WC3 environmental terrain-fog state and its `[DefaultZFog]` reset target to the level field schema. `ReadGame()` republishes the restored active state through `CS_SCENE_FOG` after the map reload and level-state restore, preventing the client from keeping the freshly initialized map fog instead of the saved scripted value. See [Environmental Terrain Fog](environmental-fog.md).
+
+Channel cast serials, saved origins, and owner/target incarnation stamps are persisted in version 21.
+The appended channel thinker callback roster and continuation tests are described in
+[ability verification](ability-verification-review.md#dispatch-and-persistence).
+
+Ability helper thinkers may also use the existing `channel_t` pool purely as a save-safe incarnation carrier.
+Reincarnation snapshots its Hero owner, Acid Bomb snapshots both caster and victim, Flare snapshots its caster, and the
+timed Metamorphosis reversion snapshots the transformed unit before using delayed callbacks. `reincarnation_think`,
+`acid_bomb_think`, and `morph_end` are appended to the C-callback roster so saves made while those effects are pending
+restore the live callback rather than failing on an unrecognized process pointer. This
+does not make those abilities channels and adds no save-schema fields: the existing `owner`/`goalentity` `F_EDICT` links
+and `channel->owner_spawn_time` / `channel->target_spawn_time` scalars carry the contract.
+
+Save format version 39 adds the launch-time attack type for basic projectiles.
+Version 38 added the launch-time artillery attack type, target masks, splash
+radii, and damage factors so in-flight shots retain their impact profile across
+save/load.
+
+Save format version 40 adds the fixed region registry and region references in
+event registrations. Region handles use stable registry slot IDs in the level
+state and JASS snapshot format 6 persists `GetTriggeringRegion()` in yielded
+trigger context. Version 41 adds persisted region and region-event handle
+generations so recycled slots retain their `GetHandleId` identity after load.
+Version 42 persists the edict incarnation captured by unit-bound event
+registrations, preventing slot reuse from retargeting an old registration.
+
+Version 43 persists the queued-event subject incarnation (`edict_spawn_time`
+and `edict_spawn_tracked`) alongside its edict index, so an unread event is
+discarded if its subject slot has been freed or reused. Version 44 persists the
+queued-event source incarnation (`source_spawn_time` and
+`source_spawn_tracked`) alongside its edict index, allowing dispatch to clear a
+stale source without losing an event for a still-current subject.
+
+Version 45 adds per-edict Way Gate destination/activation values plus the
+explicit approach target, approach goal, and target-incarnation guard. The two
+entity pointers use `F_EDICT` relocation and the live Way Gate move uses the
+existing `F_MMOVE` relocation. Version 44 saves are rejected by the exact-version
+guard; the `sizeof(edict_t)` header check remains an independent layout check.
+
+Version 46 adds unit-specific forced-visibility reference counts used by
+Soul Trap, plus the completed Soul Trap item links. Version 45 saves are
+rejected by the exact-version guard; the expanded `edict_t` size is checked
+separately before decoding the raw edict records.
+
+Version 48 adds the Entangled Gold Mine overlay's caster relationship.
+`mineoverlay.caster` uses the normal `F_EDICT` relocation path, while the saved
+caster spawn generation and Entangle ability alias let load restore the same
+per-unit hidden/permanent Aent lifecycle without trusting a recycled entity
+slot. Version 47 saves are rejected by the exact-version guard; the expanded
+`edict_t` size remains an independent layout check.
+
+Version 49 persists whether Aent was already permanent before an Entangle
+overlay made it permanent. The final live overlay restores that original value,
+including after save/load; version 48 saves are rejected by the exact-version
+guard.
+
+Version 50 persists the generation-guarded Tree owner on an Entangled Mine
+overlay, alongside the caster relationship. Direct Tree removal can therefore
+find and tear down the exact overlay after load without relying on proximity;
+version 49 saves are rejected by the exact-version guard.
+
+Version 51 persists Ancient Root/Uproot transition state. Version 50 saves are
+rejected by the exact-version guard.
+
+### Cursor target presentation
+
+Version 52 adds a generation to the transient held-item reference in the client
+menu. Both fields are cleared by the runtime-field schema, along with the target
+callbacks. ReadClient clears cursor mode/image stats; connected clients resolve
+their restored race/CustomSkin model against the rebuilt configstrings. A save
+made while carrying an item on the pointer cannot restore a stale pointer or icon.
+The `wc3_cursor.save_discards_transient_held_item` regression covers this inverse.
+
+Cursor signal overlays and minimap point-routing flags are transient and clear
+on load (version 52 client layout). They never serialize an active input overlay.
+
+Version 53 persists each unit's explicit `UnitShareVision` recipient mask.
+
+### Current combat and cargo state
+
+Format 57 writes the current entity struct directly through the normal Quake II field serializer. Attack target incarnation, cooldown/backswing deadlines, per-weapon backswing points and range buffers, and pending Cargo Drop state live in that record. The cargo goal uses the ordinary `F_EDICT` fixup; its initiating rawcode and goal spawn identity remain scalar state. Invalid external pointers on write or unallocated goal indexes on load are rejected.
+
+All format-56 variants, including the former combat/cargo extensions and extensionless files, are rejected. There is no frozen entity projection, optional extension reader, or legacy propulsion-window migration. Explicit zero propulsion windows round-trip as authored runtime state.
+
+Attack cooldown begins at swing start, independently of animation `wait`; it continues elapsing when another order or rooted state pauses the attack callback. A target escaping before damage point cancels the pending hit but does not erase the cooldown. A committed melee hit or projectile launch starts backswing recovery, and a save/load during recovery preserves only the remaining backswing time.
+
+Regression coverage includes prior/future version rejection, map-selection layout rejection, current combat/cargo round-trips, invalid cargo goal references, and payloads with unexpected trailing records. Shared Warcraft III ability lifecycles also have combined round trips for an ability-owned timed summon, a live homing spell projectile (owner/target generations plus movement state), corpse reservation (flag plus owning status marker), an owned attached effect (owner plus target-generation guard), and Flare's caster-bound reveal thinker (callback, point, expiry, and owner incarnation). Far Sight remains covered separately as a player-scoped reveal thinker whose saved lifecycle is intentionally independent of caster identity. The movement suite saves a Zeppelin en route and completes its unload after restoration. Run `make test-wc3-engine WC3_PATTERN='wc3_save.*'` for both ROC and TFT.
+
+### Manual-save script checkpoints (Patches 5 and 5a)
+
+After a successful ESC-menu or console manual save, the engine snapshots the
+active script-save scope into a **private, immutable checkpoint** under
+`saves/script/checkpoints/<engine-generated-id>/`. It includes exactly the
+permitted flat scripted saves, `Blizzard/<slot-or-Zones>/` zone files, and the
+`cache/` game-cache sidecars. The engine writes an `ORCSCOPE2` binding in
+`saves/script/bindings/` after the checkpoint copy completes; that binding
+contains the checkpoint ID plus the player-save file size and fingerprint.
+The file name / checkpoint ID is never supplied by JASS. A failed checkpoint
+must not publish a binding. The old `ORCSCOPE1` binding format is deliberately
+not accepted because it referred to mutable live storage.
+
+Loading a named manual save validates its file fingerprint, reads the private
+binding, then **clones the checkpoint into a new, random script scope** before
+loading the destination map. It does not continue writing to the original
+campaign session or to the checkpoint itself. Loading an older named save
+therefore reads its original `Campaigns.w3v` sidecar and saved zones, not later
+mutations made while playing a newer slot. Repeat loads create fresh branches,
+so evolving one loaded save never modifies either slot's checkpoint. The
+original Rexxar `EVENT_GAME_LOADED` handler still owns copying its backed-up
+zone files into the active `Blizzard/Zones` directory.
+
+Scripted zone `LoadGame` deliberately does **not** adopt a named-save binding
+or create a new scope: it continues within the current campaign's live storage.
+After applying the snapshot, its return callback dispatches
+`EVENT_GAME_LOADED` with `MAP_RELOADED` temporarily set, so the map imports
+travelling Heroes from its transition cache without running the user-load
+directory-copy handler. In disk-cache mode, `InitGameCache`
+reads committed cache sidecars in the active scope, invalidating in-memory
+cache entries when the engine changes scope. The campaign's `Export_All` and
+`Import_All` scripts remain authoritative for travelling heroes and their
+current quest progression; actual Rexxar integration remains to be tested.
+
+The copy is no-follow and fail-closed on POSIX, rejecting symlinks and special
+files. Both platforms enforce a narrow directory shape and a checkpoint limit
+of **512 MiB and 2,048 regular files**. These are per-checkpoint safeguards,
+not a total disk quota. Newer storage-management work optimizes and reclaims
+some of this space as described below.
+The storage is engine-owned; host-level tampering or modification is not
+cryptographically authenticated. Other limitations include full rollback after
+failed cross-map restoration and native compatibility with Blizzard's binary
+`.w3z` and `.w3v` formats. The engine's existing versioned save format is used.
+
+### Campaign-owned live workspaces and compact snapshots
+
+#### Lazy manual-save checkpoints
+
+Successful manual saves create campaign checkpoints **only if the active live
+workspace already contains at least one persisted script-save or game-cache
+file**. Simply starting a map, generating an opaque playthrough ID, resolving
+a script filename, or initializing an empty cache does not create a checkpoint.
+A normal single-map save therefore produces just its ordinary `.sav` file;
+loading or deleting it does not manufacture `script/bindings` or checkpoint
+directories. Empty script-workspace directories alone do not require a snapshot. Cache
+reads (including `InitGameCache` on ordinary maps) now resolve paths without
+creating a workspace or `cache/` directory; only the `SaveGameCache`
+write path may materialize that directory. Previously created empty workspace trees
+are removed at the ordinary playthrough reset when still owned by that session.
+
+When committed zone saves, scripted save files, or disk-backed cache sidecars
+exist, the existing immutable checkpoint and `ORCSCOPE2` binding behaviour is
+unchanged. An unreadable or unsafe workspace fails the binding step rather than
+silently dropping campaign state. If an existing named slot is overwritten in
+a map with no persistent script files, the old `.scope` binding is revoked so
+it cannot restore stale campaign data; its previous checkpoint is eligible for
+normal orphan cleanup. Existing bound saves remain loadable.
+
+
+The engine uses a **stable live workspace per playthrough branch**:
+
+```text
+saves/
+  <manual-slot>.sav
+  campaigns/<random-playthrough-id>/live/
+    Blizzard/Zones/<zone>.w3z.sav
+    Blizzard/<slot>/<zone>.w3z.sav
+    cache/gamecache-Campaigns.w3v.orcgc
+  script/bindings/<manual-slot>.sav.scope
+  script/checkpoints/<random-checkpoint-id>/
+    Blizzard/...  (immutable save-time data)
+    cache/...     (immutable save-time data)
+```
+
+`script/bindings` and `script/checkpoints` retain their existing locations and
+`ORCSCOPE2` format, so previously bound manual saves continue to restore from
+older, **uncompressed** checkpoints. No migration of the historical live
+`saves/script/<id>` directories is attempted. The playthrough ID is generated
+and managed by the engine and is never accepted from map JASS. `ChangeLevel`
+and scripted cross-map `LoadGame` keep using `live/`; selecting a manual save
+creates a fresh writable branch from the chosen immutable checkpoint. This
+preserves different save slots even when loading a much older one.
+
+The engine discards its own previous live workspace when resetting the
+playthrough scope (new game, return to menu, named manual load), using
+no-follow recursive deletion on POSIX and reparse-point checks on Windows.
+The underlying save file and immutable named-save checkpoint remain intact.
+A named-load request checks that the save has a readable map identity before
+abandoning the active workspace. A later payload-validation failure can still
+replace the running game and is not yet a transactionally reversible load.
+Deleting a manual save also removes its private binding. On POSIX, manual-save
+commit/delete opportunistically reclaims up to eight unreferenced checkpoints
+older than seven days under a cross-process advisory binding lock. Windows
+orphan-checkpoint collection and recovery of abandoned branches after an
+abrupt process crash remain follow-up work; never delete unrecognized data.
+
+Each checkpoint reference query opens a fresh binding-directory cursor with
+`openat(bindings, ".", ...)`. `dup(bindings)` shares the directory offset and
+can leave subsequent scans at end-of-directory, incorrectly treating bound
+checkpoints as orphans. The regression
+`script_saves.collection_preserves_all_bound_checkpoints_and_removes_orphans`
+ages two bound checkpoints and one orphan beyond the grace period, runs
+collection, restores both bound saves, and verifies only the orphan vanished.
+
+For each **immutable checkpoint file**, Linux first attempts a CoW reflink.
+This shares physical extents while keeping writable files independent; it is
+safe even when a writer truncates the live copy in place. When reflinking is
+
+### Native-owned campaign and death state (version 98)
+
+Version 98 serializes `level.campaign_menu_race` (legacy 1..4 or 0 for selector)
+and preserves `AI_SCRIPT_EXPLODED` in the existing saved `edict.aiflags` field.
+This avoids losing legacy campaign selection and scripted unit death intent
+across save/load. `wc3_save.legacy_campaign_menu_race_round_trip` and
+`wc3_save.field_script_explosion_round_trip` cover the values. Older saves are
+rejected by the existing strict save-version policy.
+unavailable (or on Windows), the engine can instead write a level-1 gzip
+payload inside an engine-private `ORCPGZ1!` envelope if that consumes fewer
+bytes than the original file. The restore path requires a real gzip member
+following the private marker, rejecting a malformed marker-only file rather
+than accidentally using zlib's transparent raw-read fallback. Restoring
+checkpoints expands such files back
+into their original uncompressed bytes; legacy plain checkpoint files are also
+accepted. The live zone snapshots and manual `.sav` files retain the existing
+serializer and checksum format. This is intentionally **not** an on-disk WC3
+`.w3z`/`.w3v` format conversion. Compression work is confined to a checkpoint
+copy so normal zone transitions need not compress/decompress an entire zone.
+
+Checkpointing remains bounded by 512 MiB of logical contents / 2,048 files;
+compressed files are expanded with a corresponding upper bound. Checkpoint
+creation may temporarily require extra space, and compression is a fallback,
+not guaranteed. On filesystems without reflink support, restores materialize
+new live files in full. A separate aggregate quota, explicit storage audit
+command, and crash-recovery garbage collector remain future improvements.
+
+### Hero score-screen snapshot and version 95
+
+The Heroes Used column is built from currently owned hero entities when the
+score screen freezes the outgoing match. It is not a persisted running counter.
+Version 95 removes `heroes_used` from the serialized `gameClient_t::score`
+layout; the serializer rejects version 94 and earlier without migration. The
+score-screen hero portraits/levels are transient and are not saved. Earned XP
+and the existing unit/resource score state still round-trip normally.
+
+### Item death-drop overrides and version 96
+
+Version 96 persists per-item `SetItemDropOnDeath` overrides in the raw edict
+record. Version 95 and earlier saves are rejected; save compatibility and
+migration are not supported.
+
+### Water base color and version 97
+
+Version 97 persists the `SetWaterBaseColor` RGBA value and republishes it after
+load so connected clients restore the authored water tint. Version 96 and
+earlier saves are rejected.
+
+### Timed full-map visibility and version 99
+
+Version 99 persists the player-local simulation deadlines for Glyph of
+Omniscience. Visibility is recomputed from those deadlines after load, while
+the explored map remains in the existing fog exploration payload.
+
+### Restored static pathing (opened gates)
+
+`SV_Map` builds static obstacles from the map's initial entities, before the
+saved snapshot is restored. A gate opened or destroyed during gameplay can
+therefore appear open after loading while the old, closed gate's cells remain
+in the pathfinding grid. `ReadGame` must finish rebinding all saved entities,
+restore destructable alive/death footprints using `G_RestoreDestructableData`,
+then call `CM_BakeStaticObstacles()` **once** before resuming simulation.
+This also updates footprints for other moved/removed structures. Animation is
+not the authoritative input for pathfinding; the saved destructable lifecycle
+and pathing fields are.
+
+## Local numbered control groups
+
+Manual Warcraft III saves persist the ten local selection groups (0–9) in a
+versioned companion file named `<slot>.sav.groups` in the normal user-save
+directory. This data is owned by the universal client, not by JASS or the
+game-module simulation. Both the `save` command and in-game Save menu write
+the companion after the main game save succeeds. The `load` command and
+in-game Load menu restore it only after a successful game-state load, following
+the normal map-transition reset. Missing or incompatible companion files leave
+groups empty (so older saves remain loadable); saved IDs are bounded on read
+and checked against live selectable entities when recalled. Double-tap focus
+state never survives a load. Scripted zone loads do not restore manual groups.
+Deleting a manual save also deletes its companion file. The companion must
+travel alongside the `.sav` file when copying saves to another installation.
+
+The `client_groups.save_load_roundtrip` regression uses a `Test_TempPath` home,
+so parallel ROC/TFT shards and other worktrees never overwrite a real manual-save
+companion. It covers successful restore, missing/truncated companions, and rejected
+path traversal, and restores the prior local selection state afterward.
+
+### Item pools and version 100
+
+`itempool` is a VM-owned inline payload, alongside `location` and `rect` in
+`jass_snapshot_ownedhandle`. It must bypass the host handle codec: the host owns
+entity/registry slots and otherwise encodes this unknown type as null. Version 100
+preserves each pool's weights, rawcodes, destroyed flag, and shared identity across
+aliases; version 99 and older saves are rejected. The regression
+`wc3_api.item_pool_snapshot_preserves_weights_aliases_and_destruction` saves a global
+pool and alias, restores them, removes an entry through the alias, then creates an
+item through the original. It also checks invalid rawcodes and retired pools.
+JASS verification scheduled with `jass_callbyname(..., true)` requires
+`jass_runevents` before inspecting its error state; enqueueing alone does not execute
+assertions.
+
+## Optional travel records and animation text (version 102)
+
+The entity layout now references `movement`, `orders`, `route` and `wander` pools.
+Their schemas retain entity identity and clear process-local route caches on load.
+Animation request/queue/property strings are immutable interned text in memory;
+`F_ANIMSTRING` clears raw pointers and appends content after each edict, then interns
+that content while reading. A save must not depend on the old string arena surviving.
+Version 102 rejects older layouts. The network protocol is unchanged.
+See [entity and player state](state-review.md) for ownership and regression tests.
+
+## Optional Soul Trap relationships (version 103)
+
+The carrier/target Soul Trap fields now live in the optional `soultrap` pool,
+not the raw edict. Its schema fixes `head`, `carrier`, `next` and `item` entity
+references and preserves their spawn incarnations, visibility owner and injected
+skill flags. Empty records are released by the ability lifecycle. Version 103
+rejects older saves; the network wire format remains unchanged. See
+[pooled state](pooled-entity-state.md#soul-trap-relationships).
+
+## Unit flags and derived stun (version 104)
+
+The raw edict stores `uint32_t unit_flags` instead of the independent alarm,
+invulnerability, pause, pathing and timed-life-pause booleans. Its explicit F_INT
+descriptor preserves every bit; ability-owned restore snapshots still store
+normalized booleans and change only their corresponding bit on restoration.
+
+The derived `stunned` field is removed rather than serialized as a bit. Loaded
+status records supply built-in and explicit STUNNED contributions immediately;
+expired records are ignored even before the next status cleanup. Version 104
+rejects older saves. Network fields and wire layouts do not change.
+
+## Whole-edict ownership extraction (version 105)
+
+Version 105 moves unit combat/progression/skills/statuses/cooldowns, sound response
+state, basic-attack missile state, physical inventory, carried resources and sight
+overrides to typed pools. Worker build project/preview fields move into retained
+orders; client placement selection moves into transient client menu state. More
+independent switches join `unit_flags`; four unused entity callbacks disappear.
+Older layouts are rejected. Network structures are unchanged.
+
+New records use the same owner-index and nested-field fixup contract as the older
+pools. The loader checks each pool's own capacity, including `MAX_ENTITIES` unit
+pools. The initialized move anchor stays beside authored moves instead of being
+placed after large pool BSS. Status slot addresses remain stable during gameplay;
+source pointers and instance IDs survive load, while runtime Hero shortcut pulses
+are cleared. Inventory slots retain entity references; missile reflection/profile,
+vision references and carry amounts retain their scalar values.
+
+The regressions cover absent-role queries, release/reuse/reset, every new pool's
+round trip, moved field descriptors, all unit flag bits, and pool admission before
+allocation. See [the ownership audit](state-review.md#whole-edict-ownership-pass)
+for lifetime and retained-base-field decisions.
+
+## Ownership rereview (version 106)
+
+The Wander record now persists its private waypoint's spawn incarnation, so a
+reused slot or repeated route serial cannot transfer ownership. Version 106 rejects
+older layouts. Build indicators' worker `owner` and retained-order preview pointer
+both use existing entity-reference fixups.
+
+`ReadPools` resets all typed pools when any record fails, including partial raw
+reads or invalid references. `ReadGame` resets old pools before replacing edicts
+and clears all new attachments if entity reading, pool loading or subsequent
+hashtable/VM/footer validation fails. It does not dispatch gameplay cleanup through
+partially decoded records. Early header/checksum rejection leaves the old entity
+world alone; later rejection does not promise level or VM rollback.
+
+Regressions cover a truncated final pool after every earlier pool loaded, and a
+checksummed extra payload byte after a valid VM snapshot. Both rejection paths
+must leave no typed records attached.
+
+
+## Frontend Load Saved Game (RoC and TFT)
+
+`Single Player -> Load Saved Game` opens a frontend save chooser in both editions.
+The button opens the browser even when the save directory is empty, so an empty
+list can explain its state instead of appearing unresponsive. The chooser uses
+the same `FS_ListSaves()` ordering and names as the in-game ESC Load Game list,
+and the authored `MapListBox` control/skin. It does not enumerate files from
+inside the menu module: `menuImport_t` receives bounded engine callbacks for
+listing basenames, checking a save's map identity, deletion, and starting the
+load. Invalid names and saves with unreadable/incompatible headers are not
+listed. `quick` is displayed as `Quick Save` without changing its slot identity.
+
+Selecting a row highlights it; Load Game and Delete are disabled until a row
+is selected/available. Load revalidates the chosen slot before queuing
+`MenuAction("load", name)` on the client, which resolves the saved map and
+restores it through `SV_LoadGame()` at the next frame boundary. No serializer,
+map transition, or console command constructed from a filename runs within the
+menu callback. The WC3 menu enables expansion archives for a save targeting a
+built-in `Maps\\FrozenThrone\\Campaign` map before it queues the client load,
+even if the frontend was opened in RoC mode. Delete first shows a confirmation
+dialog, then calls
+`FS_DeleteSave()`, which removes the main `.sav`, its local control-group
+companion, and the bound script-save scope; the list is refreshed afterwards.
+Back returns to Single Player without loading anything. Save files are shared
+across the two frontend editions; they are not copied into separate RoC/TFT
+stores. The save/map validation and runtime still determine compatibility.
+
+Manual check in both editions: open Load Saved Game with no saves, create a
+named save and a quick save from gameplay, return to the main menu, select each
+slot and load, scroll a list longer than 12 rows, cancel deletion, delete a
+slot and verify that it disappears. A stale/invalid save must not crash or
+start a new map. Fixture-backed menu tests cover invalid and unreadable-save
+filtering, Quick Save naming, load dispatch, edition selection, and delete
+refresh. They do not exercise archive restoration or rendered retail layout.
+
+## Optional component attachments (version 107)
+
+Way Gate and Avatar records now attach through `edict_t.components`; their edict
+pointer fields are removed. Each concrete payload begins with an exact type ID
+and a runtime-only next link. `savePool_t.component` selects list lookup and
+attachment instead of an edict member offset. Save writes the type ID, excludes
+links, and restores only after decoding and validating the complete record.
+Truncated/rejected loads reset all pools and list heads. Earlier versions are
+rejected, and the network wire contract is unchanged.
+See [pooled state and components](pooled-entity-state.md#optional-components).
+
+## Second component slice (version 108)
+
+Polymorph, Raven Form, Ensnare and the artillery splash profile move onto the
+component list with `COMPONENT_POLYMORPH`, `COMPONENT_RAVEN`, `COMPONENT_ENSNARE`
+and `COMPONENT_ARTILLERY`. Their `edict_t` members and `F_IGNORE` schema rows are
+removed; each payload's field table starts with the runtime `component.next`
+exclusion and the pool descriptor carries the exact component ID. The model rebind
+after load reaches the Polymorph snapshot through `G_GetPolymorph`, and projectile
+impact in `g_phys.c` reads the saved splash profile through `G_GetArtillery`.
+Version 107 saves are rejected; the wire format is unchanged.
+
+## Third component slice (version 109)
+
+Sleep, Rally, Sacrifice, Unsummon and Blight Growth move onto the component list
+(`COMPONENT_SLEEP`, `COMPONENT_RALLY`, `COMPONENT_SACRIFICE`, `COMPONENT_UNSUMMON`,
+`COMPONENT_BLIGHT_GROWTH`). Their edict members and `F_IGNORE` schema rows are
+removed. `rally->entity`, `sacrifice->worker` and `unsummon->target` keep their
+`F_EDICT` fixups behind the runtime `component.next` exclusion; Blight Growth and
+Sleep payloads are scalar. The SC2API observation reads rally state through
+`G_GetRally`, and Train checks queued Sacrifice results through `G_GetSacrifice`.
+Version 108 saves are rejected; the wire format is unchanged.
+
+## Fourth component slice (version 110)
+
+Shadow Meld, Militia, Hero revival and worker build/repair state move onto the
+component list (`COMPONENT_SHADOWMELD`, `COMPONENT_MILITIA`, `COMPONENT_REVIVAL`,
+`COMPONENT_BUILDWORK`). `revival->producer` and `revival->queue_next` keep their
+`F_EDICT` fixups; Militia's `partner`, `partner_spawn_time` and `returning` remain
+runtime exclusions; Shadow Meld and Buildwork payloads are scalar. The production
+queue walkers (`ProductionNext`, HUD queue, `Get_Commands_f`) read revival state
+through `G_HeroIsReviving` and `G_GetRevival`. Version 109 saves are rejected; the
+wire format is unchanged.
+
+## Fifth component slice (version 111)
+
+Ancient Root, the Gold Mine admission record, Haunted/Entangled mine overlays, the
+Acolyte slot record, Cargo and Soul Trap move onto the component list
+(`COMPONENT_ANCIENT_ROOT`, `COMPONENT_GOLDMINE`, `COMPONENT_MINE_OVERLAY`,
+`COMPONENT_ACOLYTE_MINE`, `COMPONENT_CARGO`, `COMPONENT_SOULTRAP`). Every entity
+reference inside those payloads keeps its `F_EDICT` fixup (including the
+`cargo->units[]` array and the four Soul Trap links) behind the runtime
+`component.next` exclusion. `G_InitGoldMine` now attaches through `G_AddComponent`.
+Version 110 saves are rejected; the wire format is unchanged.
+
+## Sixth component slice (version 112)
+
+Research, the Food ledger and shop Stock move onto the component list
+(`COMPONENT_RESEARCH`, `COMPONENT_FOOD`, `COMPONENT_STOCK`). Research and Food
+payloads are scalar; Stock keeps its counted `items`/`units` struct arrays behind the
+runtime `component.next` exclusion. The edict schema no longer carries a `stock`
+member, which the shop stock round-trip test now asserts. Version 111 saves are
+rejected; the wire format is unchanged.
+
+## Seventh component slice (version 113)
+
+The spell Channel record moves onto the component list (`COMPONENT_CHANNEL`).
+`channel->source_item` keeps its `F_EDICT` fixup behind the runtime
+`component.next` exclusion; the cast serial, owner/target spawn times and origin
+stay scalar. Channel is also the last typed pool in the stream, so the truncated
+pool test still uses it. Version 112 saves are rejected; the wire format is unchanged.
+
+## Eighth component slice (version 114)
+
+Destructable and Construction move onto the component list
+(`COMPONENT_DESTRUCTABLE`, `COMPONENT_CONSTRUCTION`). The construction
+`primary_builder` and `worker` references keep their `F_EDICT` fixups; the
+destructable pathing textures and drop-set views stay process-owned exclusions and
+are rebuilt from object data after load, as before. The destructable section keeps
+`DESTRUCTABLE_POOL_CAP`. Version 113 saves are rejected; the wire format is unchanged.
+
+## Ninth component slice (version 115)
+
+Item moves onto the component list (`COMPONENT_ITEM`). The item `carrier`,
+`pending_use_carrier` and `soul_target` references keep their `F_EDICT` fixups;
+charges, drop ID, user data, the pawnable/droppable/death-drop overrides and the
+world/inventory placement remain plain values of the payload. The section keeps
+`LIFECYCLE_POOL_CAP`. Version 114 saves are rejected; the wire format is unchanged.
+
+### Runtime link handling
+
+`WritePool` and `ReadPool` clear the `component.next` link of every component
+pool record themselves, using the descriptor's component ID, so the per-type
+field tables no longer carry a `component.next` exclusion row. The written bytes
+are identical to the row-based exclusion (the link was already zero in the file),
+so the format version does not change; the earlier slice sections describe the
+rows as they were introduced.
+
+## Generated component sections (since version 116)
+
+The component save sections are generated from the `G_COMPONENTS` table in
+`g_local.h`, one per row. The ten direct `MAX_ENTITIES` pools are written first
+in their previous relative order (`orders`, `movement`, `route`, `wander`,
+`unit_state`, `sound`, `missile`, `inventory`, `harvest`, `vision`). The
+component sections follow in component-ID order, from `waygate` (1) through
+`pillage` (29). Each section's name, record size, capacity, field table and exact component
+ID come from its row, and restore allocates through the component registry
+(`G_AllocDetachedComponent`) instead of a per-type save allocator. Payload bytes,
+ID validation, link clearing and entity-reference fixups are unchanged; only the
+section order differs from version 115, so version 115 saves are rejected. The
+wire format is unchanged. Version 117 adds the Pillage building ledger and Avatar
+original-scale field. Version 118 adds the launch-time attacker incarnation to each
+basic attack missile; mismatched earlier versions are rejected.

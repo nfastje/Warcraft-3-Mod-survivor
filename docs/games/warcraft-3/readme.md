@@ -1,0 +1,179 @@
+# Warcraft III
+
+This is the main game target for OpenWarcraft3. It is the most complete path in the tree, and the place where the engine is being shaped into a playable RTS rather than only a viewer.
+
+The code here owns Warcraft III-specific game logic, JASS, SLK/profile parsing, MDX and W3M rendering hooks, the client-side FDF UI, and the Warcraft III test suites.
+
+## Status
+
+Playable prototype. Not parity yet.
+
+The current build can start from the menu, launch campaign or map content, render Warcraft III terrain/models/UI, run a server-authoritative simulation, and execute a growing slice of unit, command, combat, JASS, UI, and networking behavior. It is still an indie engine project in motion: solid foundations, visible gameplay, lots of systems present, and plenty of rough edges.
+
+
+## Working
+
+- Warcraft III MPQ-backed data loading through the shared archive layer.
+- W3M/W3X map archive loading for maps present in the configured data folder or test archive.
+- Warcraft III terrain rendering through the game renderer hooks.
+- MDX model loading and rendering, including animation evaluation paths used by units and UI models.
+- Client-side FDF UI runtime for menus, dialogs, map selection, options, single player flow, and Warcraft-style frame layout.
+- Main menu and Single Player campaign selection flow.
+- Quake-style console, cvars, command completion, and map command routing.
+- Listen-server loopback play path and UDP client/server plumbing.
+- Server-authoritative unit simulation with selection commands, movement, collision, basic pathing, animation states, health, damage, death, and inventory slots.
+- Basic RTS command and ability coverage, including move, stop, attack, train, summon, item flow, Thunderbolt-style target spell behavior, timed life, stun status, and selected aura/status hooks.
+- JASS VM and native API coverage for many gameplay-facing functions.
+- SLK/profile parsing for Warcraft III data tables.
+- Deterministic test assets and game-specific tests under `games/warcraft-3/tests/`.
+
+## Partial
+
+- Combat and abilities are functional but intentionally selective. Many Warcraft III ability codes are registered as stubs or partial local behavior.
+- Fog of war has authoritative server-side state and network sync coverage, but the full gameplay/rendering polish is still evolving.
+- UI is client-side and FDF-driven, but not every in-game panel or Battle.net-era screen is implemented.
+- Asset compatibility is strongest around original Warcraft III data, with ongoing work for later 1.29-era data and edge cases.
+- Multiplayer transport and lobby flows exist, but this is not yet a finished multiplayer product.
+- Warcraft map/background music has JASS playlist/state handling and optional `FFMPEG=1` decoding; menu glue music, map skin overrides, and exact remaining retail timing semantics are still incomplete.
+
+## Not There Yet
+
+- Full campaign scripting and trigger parity.
+- Complete Warcraft III object-data overrides, the remaining upgrade-effect families, build rules, and race-specific gameplay.
+- Full ability, buff, autocast, item, and hero-system parity.
+- Complete save/load, replay, AI, and editor-level map behavior.
+- Production-grade user experience around errors, missing assets, and unsupported maps.
+
+## Build And Run
+
+Build the default target:
+
+```bash
+make build
+```
+
+Run the Warcraft III client:
+
+```bash
+make run
+```
+
+Run a map directly:
+
+```bash
+make run-map
+```
+
+Useful validation:
+
+```bash
+make test
+make test-ui
+make test-jass
+```
+
+## Notes
+
+This target expects a legitimate Warcraft III data folder. Original assets, names, and game data belong to Blizzard Entertainment. The repository contains code, fixtures, and generated test assets, not the retail game data.
+
+## Documentation
+
+File formats, renderer notes, UI/FDF behavior, and gameplay coverage work used by this target. Engine-wide client, server, networking, and runtime-module docs live under `docs/architecture/`.
+
+### File Formats
+
+- [Warcraft III Map Format](file-formats/map.md)
+- [Warcraft III MDX Model Format](file-formats/mdx.md)
+- [SLK Spreadsheet Format](https://github.com/corepunch/open-realm/blob/main/games/warcraft-3/file-formats/slk.md)
+- [UI Frame Definition File](file-formats/fdf.md)
+
+### Detailed File Notes
+
+- [Warcraft III File Format Specifications](file-docs/readme.md)
+- [MPQ Archive Format](file-docs/mpq.md)
+- [W3M / W3X Map Container](file-docs/w3x-w3m.md)
+- [war3map.w3e Terrain](file-docs/w3e.md)
+- [war3map.doo Doodads](file-docs/doo.md)
+- [war3map.shd / war3map.wpm](file-docs/shd-wpm.md)
+- [Warcraft III FDF Reference](file-docs/fdf.md)
+
+### Implementation Notes
+
+- [Terrain Deformation](terrain-deformation.md)
+- [Economy And Unit Presentation](economy-and-unit-presentation.md)
+- [Call to Arms And Militia](call-to-arms-and-militia.md)
+- [Timed Status Presentation](timed-status-presentation.md)
+- [Unit Vertex Color](unit-vertex-color.md)
+- [Undead07 Shield Zones](undead07-shield-zones.md)
+- [Unit Selection And Control](selection-and-control.md)
+- [Team Colors](team-colors.md)
+- [Shift Order Queue](order-queue.md)
+- [Group Attack And Chase Gaps](group-attack-chase-gaps.md): remaining combat-movement parity work and acceptance coverage.
+- [Persistent Hero And Idle-Worker Shortcuts](unit-shortcuts.md)
+- [Pathfinding And Harvest Reachability](pathfinding.md)
+- [Naval Movement And Water Pathing](naval-movement.md): `float`/`amph` routing, water pathing, collision domains, and bridge semantics.
+- [Way Gates](way-gates.md)
+- [Inventory And World Items](inventory-and-items.md)
+- [Map Trigger Strings in Authored Names](trigger-strings.md)
+- [Trigger Event Dispatch And Response Context](trigger-events.md): queued event actions, immediate `TriggerExecute`, and nested coroutine context.
+- [Runtime Unit Spawn Lifecycle](unit-spawn-lifecycle.md)
+- [Human07 Mission Troubleshooting](human07-troubleshooting.md): mission-end, AI assault, removal, spawn, collision, and Birth regressions.
+- [Neutral Shops And Mercenary Camps](neutral-shops.md)
+- [Ability And Item Effects](ability-and-item-effects.md)
+- [Cyclone](cyclone.md): organic-enemy action lock, ROC BuffID fallback, TFT `organic` targs.
+- [Entangling Roots](entangling-roots.md): BEer root/disarm, channel interruption, authored Eer1 DPS, dispel/save lifecycle.
+- [Volcano](volcano.md): channeled molten-rock waves; Dur is stun length, DataB×DataC is channel length.
+- [Pocket Factory](pocket-factory.md): timed factory producer; DataB is Clockwerk unitCode via `S_SpellDataId`.
+- [Stasis Trap](stasis-trap.md): Asta ward arm/detect/detonate; DataD/HeroDur stun, BuffID `Bsta`.
+- [Sentry Ward](sentry-ward.md): Aeye/AIsw summon; detect radius from Adt1 Rng via `S_UnitIsDetected`.
+- [Self Destruct](self-destruct.md): Clockwerk/Sapper Kaboom; `DataF` death blast via `S_UnitDeathAbilities`.
+- [Rain of Chaos](rain-of-chaos.md): point-target Inferno landings, DataA abilCode, not channeled.
+- [Inferno](inferno.md): point-target delayed blast + summon; DataB life, Dur stun, DataC delay.
+- [Dark Portal](dark-portal.md): Archimonde point-target demon exits; DataA unitList, DataB/C min/max, not Mass Teleport.
+- [Healing Spray](healing-spray.md): channeled point heal waves; DataA/DataF heal/waves, DataD max budget.
+- [Transmute](transmute.md): kill unit for `goldCost * DataA`; DataC max creep level.
+- [Adding Warcraft III Abilities](ability-implementation.md): data, procedure macros, registration, and tests.
+- [Creep Ability Aliases](creep-ability-aliases.md): `code=` mapping, parent-owned registry rows, not `s_creep.c`.
+- [Creep Combat Effects](creep-combat-effects.md): Disease Cloud, Pulverize, Web, Monsoon and Incinerate data contracts, lifecycle and save/load tests.
+<- [Item Orbs](item-orbs.md): `AIDB` orb DataA damage via `CAbilityAttackBonus`, `S_OrbOnHit` BuffID state.
+- [Unit Stat Modifiers](unit-stat-modifiers.md): modifier ledgers, physical/spell/direct damage paths, and implementation checklist.
+- [Poison Attacks](poison-attacks.md): `Aven`/`Apoi`/`Apo2` on-hit buff state and data-driven periodic DPS.
+- [Implemented Ability Verification Review](ability-verification-review.md): reproduced failures, lifecycle fixes, and permanent regression coverage.
+- [Campaign Map Audit](map-audit.md): bounded bulk runtime sweeps with per-map errors and retained logs.
+- [Save/Load](save-load.md): versioned game serializer, Hero walk/save/load campaign diagnostic.
+- [JASS location-handle lifecycle](jass-location-lifecycle.md): safe removal, alias invalidation and snapshot treatment.
+- [Score Screen](score-screen.md): authoritative player-score accounting, `GetPlayerScore`, save contract, and remaining retail-FDF/result-transition work.
+- [Score Debug Build](score-debug-build.md): `WC3_DEBUG_SCORE=1` plus runtime cvar, compiled-out logging and regression coverage.
+- [Retail Score Experiments](retail-score-experiments.md): repeatable retail map extraction, passive score tracing, safe repacking, Wine capture, and UnitBalance comparison.
+- [DotA Custom-Map Playability](dota-map-playability.md): protected-MPQ load, hashtable demand, and map-imported object data for DotA 6.83d.
+- [Ability Coverage](architecture/ability-coverage.md)
+- [Flat C Ability System: Flags and Message Procedures](ability-system.md)
+- [Ability Inheritance: Binary Evidence](ability-inheritance-binary.md)
+- [Breakable Destructables](breakable-destructables.md)
+- [Scripted Doodad Animation](doodad-animation.md)
+- [Warcraft III UI System](architecture/ui.md)
+- [UI Flow](architecture/ui-flow.md)
+- [UI Quick Reference](architecture/ui-quick-reference.md)
+- [Map Renderer](architecture/map-renderer.md)
+- [Hero Ability Progression](hero-abilities.md)
+- [Arthas Hero Abilities](arthas-abilities.md)
+- [Ability Identity and Cooldown Ownership](ability-system.md#rawcode-and-procedure-identity)
+- [Regeneration Auras And Fountains](regeneration-auras.md)
+- [Cinematics](cinematics.md)
+- [Time Of Day](time-of-day.md)
+- [Timer Dialogs And Mission Countdowns](timer-dialogs.md)
+- [Leaderboards And Counted Objective HUDs](leaderboards.md)
+- [Hero Revival](hero-revival.md)
+- [Sounds](https://github.com/corepunch/open-realm/blob/main/games/warcraft-3/sounds.md)
+- [Music Playback](music.md)
+- [HUD Media Lifetime](hud-media.md)
+- [Campaign Loading And Asset Resolution](loading-and-assets.md)
+- [Quest And Message Log UI](quest-and-message-log-ui.md)
+- [Allies Menu](allies-menu.md)
+- [Building Damage Rendering](building-damage-rendering.md)
+- [Human Barracks Unit Abilities](human-barracks-unit-abilities.md)
+- [Research And Upgrades](research-and-upgrades.md)
+
+- [Building construction](building-construction.md) — shared build/train tech availability, placement validation, Human construction, and power building.
+
+- [Ability message procedures](ability-procedures.md): registry, payload/result contracts, default delegation, and lifecycle.

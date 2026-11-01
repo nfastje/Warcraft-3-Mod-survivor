@@ -1,0 +1,318 @@
+# Server-Authored UI Payloads
+
+## Contract
+
+`uiFrame_t.buffer` is a wire payload, not a place to serialize an entire
+renderer or parser runtime struct for convenience. The game module authors the
+smallest frame-type-specific schema the client drawer needs. Shared frame data
+already carried on the wire by `uiFrame_t`—rectangle, color, texture, text, and
+commands—must not be repeated in the payload.
+
+The payload length is one unsigned byte, so the hard wire limit is 255 bytes:
+
+```text
+svc_layout, layer
+  MSG_WriteDeltaUIFrame(...)
+  byte payload_size
+  payload[payload_size]
+...
+long 0, short 0                  termination marker
+```
+
+The flow is:
+
+```text
+game UI authoring
+  -> UI_WriteProxyFrame
+  -> gi.Write(PF_UIFRAME)
+  -> server/sv_game.c:PF_Write
+  -> client/cl_parse.c:CL_ParseLayout
+  -> client/cl_layout.c:SCR_Clear
+  -> client/cl_scrn.c frame-type drawer
+```
+
+`MSG_ReadByte` intentionally retains signed-`char` behavior for legacy callers,
+including `-1` sentinels. Code reading an unsigned wire field must cast its
+result to `BYTE`; do not globally change `MSG_ReadByte` semantics.
+
+## Frame Point ABI
+
+`common/msg.c:uiFrameFields` serializes each `uiFrame_t.points` element and
+`flagsvalue` as one four-byte `NFT_LONG`. Bitfield allocation units must therefore
+agree across platforms; a same-build encoder/decoder does not make an oversized
+point safe because the schema still copies only four bytes.
+
+The mixed enum/`uint8_t`/`int16_t` point declaration occupies four bytes with
+the Unix ABI but eight with Microsoft bitfield packing. The enum/`uint8_t`
+`flags` declaration similarly puts `alphaMode` outside `flagsvalue` under that
+ABI. [PR #628](https://github.com/corepunch/open-realm/pull/628) uses four-byte
+bitfield base types for both, preserving the Unix wire image. A point with
+`targetPos=FPP_MAX`, `used=1`, `relativeTo=UI_PARENT`, and `offset=-12345`
+must encode as `82 ff c7 cf` on supported little-endian targets.
+
+For an ABI diagnostic, build a fresh `test-core` with `CC='clang -mms-bitfields'`
+and separate `BIN_DIR`/`LIB_DIR` paths, then compare against the default build.
+PR #628 adds `net.layout_point_fields_survive_the_wire` to exercise the actual
+layout encoder and client decoder. This diagnostic checks packing; it does not
+replace a native Windows build for SDK, linker, or runtime verification.
+
+## What Went Wrong
+
+In the first textured WoW quest scrollbar implementation, I made the mistake of
+extending `uiScrollBar_t`, the full legacy FDF runtime shape, with three
+complete `uiSimpleButtonState_t` values and transmitted button/thumb
+dimensions. That made every scrollbar payload 192 bytes.
+
+This was the wrong payload design for two reasons:
+
+1. It serialized data the quest drawer did not use: four FDF backdrops, three
+   fonts, three font colors, three independent UV rectangles, and explicit
+   dimensions already implied by the frame geometry.
+2. It crossed 127 bytes and exposed an existing decode bug. The one-byte value
+   `192` was read through signed `char` as `-64`, then assigned to `DWORD` as
+   `4294967232`. `CL_ParseLayout` consequently reported
+   `malformed layer 8` because the apparent payload exceeded the message.
+
+The diagnostic regression serialized one frame with a 192-byte payload. Before
+the fix it produced this decisive boundary evidence:
+
+```text
+CL_ParseLayout: malformed layer 8 frame=1 payload=4294967232 read=10 total=208
+```
+
+The mistake was not that 192 exceeds the protocol limit—it does not. The
+mistake was treating a broad runtime struct as an appropriate wire schema. The
+signed-byte bug was a separate defect revealed by that waste.
+
+## Fix
+
+Both layout decoders now read `uiFrame_t.buffer.size` as
+`(BYTE)MSG_ReadByte(...)`, so all legal sizes from 0 through 255 retain their
+wire value. The server-side layout diagnostic uses the same interpretation.
+
+The WoW scrollbar now sends `uiScrollBarImage_t`:
+
+| Field | Bytes | Meaning |
+|-------|------:|---------|
+| `RESOURCE image[3]` | 6 | Down arrow, up arrow, and thumb texture IDs |
+| `BYTE texcoord[4]` | 4 | One UV crop shared by all three textures |
+| **Total** | **10** | Asserted by the WoW quest serialization test |
+
+The client selects compact scrollbar art only when the payload size exactly
+matches `sizeof(uiScrollBarImage_t)`. Otherwise it accepts the full legacy
+`uiScrollBar_t` FDF backdrop payload. Thus the optimization does not remove the
+generic scrollbar path.
+
+Warcraft III server-authored FDF windows use that legacy path. A serialized
+`FT_SCROLLBAR` owns its track, increment arrow, decrement arrow, and thumb art
+in one `uiScrollBar_t`; the authored button children are embedded control art
+and must not also be emitted as independent frames. This is important for the
+stock TextArea controls: serializing those children independently leaves their
+template-relative geometry unresolved and can place unrelated placeholder art
+at the window origin. The WC3 bridge also applies TextArea's declared scrollbar
+relationship before flattening anchors, so a template that provides only a
+scrollbar width still resolves to the text viewport's right edge.
+
+Compact mode deliberately supports only what the authoritative WoW template
+requires:
+
+- one visual state;
+- one UV rectangle shared by all parts;
+- no track backdrop;
+- square arrow and thumb parts whose height is the frame width multiplied by
+  the per-game `UI_PIXEL_ASPECT`;
+- white texture tint.
+
+Those limits reduced the type payload from 192 to 10 bytes (94.8%) without
+changing the visible 16x16 quest controls. If a future control genuinely needs
+more states or independent geometry, define another explicit compact wire
+shape or use the existing full schema; do not inflate the common compact shape.
+
+## What We Strive For
+
+For every new `uiFrame_t.buffer` schema:
+
+1. Start from the draw call's irreducible inputs, not an existing runtime
+   struct. Write down which values the client cannot infer.
+2. Reuse `uiFrame_t` fields before adding payload fields. Geometry belongs in
+   `frame.size`/anchors and common art in `frame.tex` when one texture is
+   sufficient. Confirm the field is present in `uiFrameFields`; a member merely
+   existing in the runtime struct does not make it part of the wire contract.
+3. Transmit resource IDs, compact enums, flags, and quantized bytes rather than
+   paths, pointers, duplicated colors, or unused state objects.
+4. Share values that are identical across parts. A single UV rectangle is
+   preferable to three copies.
+5. Prefer a documented limitation over speculative generality. Add capability
+   only when authoritative data or a real caller requires it.
+6. Keep the schema fixed, bounded, and recognizable. Exact payload size may be
+   used as a variant discriminator when the drawer supports legacy and compact
+   forms.
+7. Test the exact serialized size, every field the drawer consumes, the compact
+   path, and the legacy/inverse path.
+8. Test wire boundaries independently of the current payload. Values above 127
+   remain legal and must decode unsigned; values above 255 require a different
+   protocol rather than truncation.
+9. Document ownership, limitations, and the authoritative source that justifies
+   the fields.
+
+The goal is not merely “under 255 bytes.” The goal is a wire schema whose every
+byte has a current consumer and whose constraints are obvious to the next
+author.
+
+## Diagnostic Workflow
+
+When a layout reports `malformed layer N`:
+
+`ui_layout_debug 1` prints generic client-side `svc_layout` begin/clear/store breadcrumbs, including the layer number, payload size, UI flags, and whether the layer is hidden. Use it only while tracing transport or layer-state problems; game modules should keep their own semantic diagnostics on the game side.
+
+1. Inspect `PF_Write(PF_UIFRAME)` and `CL_ParseLayout` together; verify frame
+   number, raw payload byte, decoded payload size, read offset, and message size.
+2. Reproduce with a serialization test that writes delta-frame metadata, the
+   size byte, the raw payload, and the six-byte zero terminator.
+3. Check every one-byte field for signed extension before investigating
+   renderer geometry or assets.
+4. Use `git blame` and `git log -p -S <symbol>` before changing a shared reader;
+   signed behavior may be an established sentinel contract elsewhere.
+5. Remove temporary diagnostic logs after the regression captures the root
+   cause.
+
+Verification commands:
+
+```sh
+make test
+make run-wow-preview ARGS="+com_frame_limit 100"
+git diff --check
+```
+
+Relevant regressions:
+
+- `net.layout_parser_accepts_scrollbar_payload_above_127_bytes`
+- `net.layout_scrollbar_draws_cropped_texture_parts_top_to_bottom`
+- `net.layout_scrollbar_without_art_draws_nothing`
+- `wow_game.deputy_willem_opens_classic_first_human_quest_frame`
+
+## Entity-Context Bindings
+
+`uiFrame_t.stat` remains an unsigned byte on the wire. Values below `MAX_STATS` bind player numeric stats, the existing
+`MAX_STATS` range binds player text slots, and reserved high-byte values bind generic live presentation contexts.
+`UI_STAT_SELECTION_TIMED_STATUS` uses value 250 for the selected-unit timer, while `UI_STAT_SELECTION_HEALTH_TEXT`,
+`UI_STAT_SELECTION_MANA_TEXT`, `UI_STAT_CONTEXT_NAME`, `UI_STAT_CONTEXT_HEALTH`, and `UI_STAT_CONTEXT_MANA` occupy 251..255.
+Keep new special bindings at or below 255; `common/shared.h` asserts the high end of this range so an enum append cannot silently
+truncate through the `NFT_BYTE` UI-frame codec.
+
+`LAYER_WORLD_HOVER` uses `cl.hover_entity` as that context only when the recipient's snapshot exposes a live hoverable model. The
+generic client resolves the pooled name from `entityState_t.name`/`CS_GENERAL`, reads compressed health and mana from
+`entityState_t.stats`, and may append the optional recipient-filtered `entityState_t.hover_value` using the label authored on
+the context-name frame. A zero `hover_value` means no secondary numeric line; nonzero values are decoded as `hover_value - 1`,
+so zero remains displayable. WC3 uses this generic slot for live Gold Mine reserves, including the hidden parent reservoir of a
+racial mine overlay. The client then projects
+`re.GetEntityOverheadPosition` through the current view matrix; the layer is skipped when the point is behind the camera or
+outside the world scissor.
+
+Context-bound hover geometry also resolves locally. Frames bound to `UI_STAT_CONTEXT_NAME`, `UI_STAT_CONTEXT_HEALTH`, or
+`UI_STAT_CONTEXT_MANA` collapse to zero layout size when that snapshot capability is absent; a present mana capability remains laid
+out even at zero current mana. `FT_SEGMENTED_STATUSBAR` uses its packed entity stat capacity as presence: zero capacity collapses the
+frame, while nonzero capacity remains laid out even when the current count is zero. Its primary texture is the filled-slot art and
+`tex.index2` is optional empty-slot art. Relative anchors can therefore describe a compact static stack without resending layout data
+as the hovered entity changes.
+
+`SCR_LayoutContextFrameVisible` owns both collapse and draw suppression, but entity-context interpretation is a
+`LAYER_WORLD_HOVER` runtime contract rather than a global meaning for `uiFrame_t.stat`. The field is shared type-specific storage:
+for example, `FT_COMMANDBUTTON` stores its active ability index there and Warcraft III uses 255 as the no-active-ability sentinel,
+which numerically overlaps `UI_STAT_CONTEXT_MANA`. Parsing or drawing another layout layer must therefore leave those values alone.
+`SCR_ClearLayer` records the layer currently being evaluated; plain `SCR_Clear` deliberately has no entity context, which also keeps
+transient windows and non-hover test layouts isolated. Within `LAYER_WORLD_HOVER`, the existing generic bindings remain frame-type
+agnostic enough for both games: Warcraft III uses `FT_NAMETAG`, while WoW uses `FT_STRING` for `UI_STAT_CONTEXT_NAME`.
+
+Do not infer visibility from a zero rectangle: `FT_SPRITE` uses model-authored geometry and only needs an anchor, while other drawers
+can measure their own content. A blanket size check in PR #482 suppressed autocast and time-of-day sprites;
+`client_layout.sprite_overlay_draws_after_button_artwork` reproduces that regression.
+`client_layout.context_bindings_are_world_hover_layer_scoped` protects the shared-stat collision and the cross-game name binding.
+`client_layout.context_visibility_and_empty_slot_art_survive_wire_draw_dispatch` checks capability changes against one retained layout
+and the secondary art's wire round trip (`tex.index` and `tex.index2` are two USHORTs encoded together by the existing `NFT_LONG`
+field).
+
+This is not a per-hover network protocol. The server sends the static frame tree, art/font indexes, geometry, and binding declarations
+once; mouse picking, projection, and evaluation of already-replicated values happen locally each render frame. Do not revive
+`clc_request_unit_ui`/`svc_unit_ui`, add an entity-name query, or resend `svc_layout` on mouse motion.
+
+`FT_SPRITE` also has a generic live numeric binding: when `uiFrame_t.stat` names a player numeric stat, the client maps that
+`USHORT` value from `0..UINT16_MAX` to an animation phase of `0.0..1.0` and appends it to the sprite animation selector as
+`@ratio`. The game module still owns the stat slot, model, sequence selector, and meaning. This lets a server author one static
+sprite frame while normal player-state snapshots advance or freeze its MDX frame without repeatedly sending `svc_layout`.
+
+Spawnable and movable gameplay panels use `svc_window`, not new `UILAYOUTLAYER` entries. Window frame strings are DWORD offsets
+into a trailing packet text arena, allowing long text independently of the one-byte frame-type payload size. See
+[Client Windows](client-windows.md).
+
+Game modules own the layer contents. WC3 and WoW send their native frame trees during `ClientBegin`; WoW authors compressed creature
+vitals through `CustomizeEntity` and keeps `entityState_t.name` hidden until that recipient selects the creature. SC2 sends a header
+and terminator with no frames until its gameplay state can author a real widget. The renderer has no parallel health-bar pass, and
+there is no ALT-driven show-all mode because one `LAYER_WORLD_HOVER` instance has one `cl.hover_entity` context.
+
+## Client-Measured Structural Widths
+
+`UIFLAG_SIZE_TO_CONTENT` sizes `FT_NAMETAG`, `FT_FRAME`, and `FT_SIMPLEFRAME` from one `uiNameTag_t` payload. The sender supplies
+the text to measure; `SCR_LayoutRect()` uses `SCR_MeasureSizeToContent()` to measure that string with the actual client font, add
+`padding_x`/`padding_y`, and apply `min_width`. `FT_NAMETAG` still measures even without the flag (padding is flag-only). Frames
+with both min and max anchors on an axis ignore the measured size on that axis and stretch instead.
+
+WC3 TimerDialog and Leaderboard use this path so their top-right edge stays fixed while the backdrop expands or contracts with the
+visible text. Keep the measurement string presentation-only: gameplay state remains authoritative on the server, and the client
+only resolves renderer-dependent geometry. A newline-separated block is the right measurement shape for several visible lines:
+`R_GetTextSize()` returns the widest rendered line, not `strlen`.
+
+## Key Files
+
+| File | Responsibility |
+|------|----------------|
+| `common/shared.h` | Shared payload schemas such as `uiScrollBarImage_t` |
+| `server/sv_game.c` | Writes delta frame, unsigned size byte, and raw payload |
+| `client/cl_parse.c` | Validates and retains complete `svc_layout` blobs |
+| `client/cl_layout.c` | Decodes retained frames and attaches payload views |
+| `client/cl_scrn.c` | Dispatches frame drawers and interprets typed payloads |
+| `tests/test_net.c` | Wire-boundary and client-drawer regressions |
+
+## See Also
+
+- [UI System Architecture](ui-system.md)
+- [Network Architecture](network.md)
+- [UI Screen Authoring](../ui-authoring.md)
+- [WoW Quest UI](../games/world-of-warcraft/quest-ui.md)
+- [WC3 Triggered Dialogue](../games/warcraft-3/triggered-dialogue.md)
+
+## Checkbox Payloads
+
+### Race-skinned stock control artwork
+
+Server-authored WC3 windows serialize stock FDF controls after the FDF tree has already been cached. Runtime logging showed that the embedded `ButtonBackdropTemplate` and `EscMenuCheckBox...` children can contain placeholder image indexes even while ordinary dialog backdrops are correct. The typed button/checkbox payload must therefore not trust those cached placeholder images for Blizzard's stock EscMenu control roles.
+
+`games/warcraft-3/game/hud/hud.c` recognizes the stable stock child-role names used by `EscMenuButtonTemplate` and `EscMenuCheckBoxTemplate` and preserves their `war3skins.txt` keys in the image configstrings. The WC3 client UI resolves those keys for the local player when the configstring is loaded. Normal/pushed/disabled button backdrops, button hover highlight, checkbox normal/pushed/disabled backdrops, and checked/disabled-check highlights all use this path. Custom control child names keep their authored image indexes unchanged.
+
+Do **not** globally defer every decorated FDF texture. That experiment fixed the Alliance root backdrop but also caused unrelated decorated backdrops to arrive with empty image paths, while the embedded control parts still carried the placeholder art. Keep per-player late resolution limited to the stock control roles whose authored skin keys are known.
+
+
+## Foreground model sprites
+
+`UIFLAG_SPRITE_OVERLAY` places an `FT_SPRITE` after the layout's artwork and button highlights; unflagged sprites
+retain their background pass. `uiFrame_t.flagsvalue` uses `NFT_LONG` as of protocol 6 so this and future high bits survive
+both normal layout and window payloads. The sender owns model selection and attachment; the shared client does not
+inspect game command strings to decide whether to draw effects. See [WC3 button particles](../games/warcraft-3/ui-button-particles.md).
+
+## Gameplay HUD hit testing
+
+`SCR_LayoutHitTest` blocks world interaction for visible `FT_TEXTURE` rectangles,
+frames with a click command or tooltip, and individually hittable `FT_MULTISELECT`
+entries. Console skin tiles intentionally block selection and orders even without
+commands or tooltips; removing the texture case lets clicks leak through the HUD.
+Noninteractive frame containers and `FT_BACKDROP` frames do not block by themselves.
+Hidden layout layers and `LAYER_WORLD_HOVER` are excluded; modal game-result and
+quest-dialog layers block globally. `SCR_LayoutMouseEvent` separately dispatches
+clickable controls.
+
+`make test-core` covers the console edges across aspect ratios and canvas policies
+in `client_canvas.console_edges_capture_input_under_both_policies`, and hiding,
+restoring, and clearing the layer in
+`client_canvas.console_texture_input_follows_layer_visibility`. Browser selection
+also requires the bundled input bindings; see
+[Browser configuration](../platform/browser.md#bundled-warcraft-iii-defaults).
