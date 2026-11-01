@@ -47,6 +47,16 @@ do
         ARMOR_PER_AGILITY = 0.15,
         SPELL_POWER_PER_POINT = 0.01,
         STACK_FALLOFF = 0.85,        -- each further pick of the same stat card gives 85 percent of the one before
+        -- Mana (see MANA_DATA). Pool and regeneration grow with Intellect as in
+        -- Warcraft III, on top of a base regeneration.
+        MANA_PER_INTELLECT = 15,
+        MANA_REGEN_BASE = 1.0,       -- mana per second
+        MANA_REGEN_PER_INTELLECT = 0.05,
+        MANA_COST_SCALE = 0.12,      -- share of the Warcraft III mana spent per second of cooldown
+        MANA_COST_PER_RANK = 0.06,   -- each rank above 1 costs 6 percent more
+        MANA_RATE_MIN = 2.5,         -- Warcraft III mana per second, kept within these bounds
+        MANA_RATE_MAX = 16.0,
+        MANA_RUNE = 0.3,             -- a mana rune restores 30 percent of the pool
         BASE_PICKUP = 170.0,
         BASE_REROLLS = 2,
         BASE_BANISHES = 1,
@@ -403,10 +413,11 @@ do
     spell('water_elemental', {name = 'Water Elemental', code = 'AHwe', icon = 'BTNSummonWaterElemental', kind = 'summon',
         cd = 16.0, count = 1, countEvery = 3, units = {'hwat', 'hwat', 'hwt2', 'hwt2', 'hwt3'}, dmg = 30, hp = 520,
         birth = FX.teleport, desc = 'Summons {count} Water Elemental for {dur} sec. It hits for {dmg}.'})
-    spell('brilliance', {name = 'Brilliance Aura', code = 'AHab', icon = 'BTNBrilliance', kind = 'aura', per = 0.05,
+    -- Warcraft III's mana regeneration aura.
+    spell('brilliance', {name = 'Brilliance Aura', code = 'AHab', icon = 'BTNBrilliance', kind = 'aura', per = 0.8, flat = true,
         interval = 1.0, dmg = 12, radius = 260, fx = FX.arcane,
-        apply = function(s, v) s.cdr = s.cdr + v.amount end,
-        desc = 'Arcane sparks hit enemies within {radius} for {dmg} damage every second. Spells recharge {pct}\037 faster.'})
+        apply = function(s, v) s.manaRegen = s.manaRegen + v.amount end,
+        desc = 'Arcane sparks hit enemies within {radius} for {dmg} damage every second. You regain {pct} mana per second.'})
     spell('arcane_missiles', {name = 'Mass Teleport', code = 'AHmt', icon = 'BTNMassTeleport', kind = 'bolt', cd = 2.2,
         dmg = 20, count = 3, countEvery = 2, range = 900, missile = FX.arcane, speed = 1100, scale = 0.8,
         desc = 'Opens a rift that hurls {count} arcane bolts at the nearest enemies for {dmg} damage each.'})
@@ -469,8 +480,8 @@ do
         dmg = 14, radius = 230, fx = FX.holyLight, attach = 'Abilities\\Spells\\Human\\DevotionAura\\DevotionAura.mdl',
         desc = 'Holy ground under the hero deals {dmg} damage every 0.75 sec within {radius}.'})
     spell('siphon_mana', {name = 'Siphon Life', code = 'AHdr', icon = 'BTNManaDrain', kind = 'chain', cd = 2.8, dmg = 30,
-        count = 2, countEvery = 2, range = 700, fork = true, lightning = 'DRAL', leech = 0.25, impact = FX.vampiric,
-        desc = 'Drains {count} nearby enemies for {dmg} damage, healing for a quarter of it.'})
+        count = 2, countEvery = 2, range = 700, fork = true, lightning = 'DRAL', leech = 0.25, manaGain = 4, impact = FX.vampiric,
+        desc = 'Drains {count} nearby enemies for {dmg} damage, healing for a quarter of it and taking 4 mana from each.'})
     spell('phoenix', {name = 'Phoenix', code = 'AHpx', icon = 'BTNMarkOfFire', kind = 'orbit', count = 1, countEvery = 4,
         dmg = 34, orbitRadius = 230, hitRadius = 90, speed = 1.6, missile = FX.phoenix, scale = 1.2,
         desc = '{count} phoenix circles the hero, burning enemies it passes for {dmg} damage.'})
@@ -608,8 +619,8 @@ do
 
     -- Night Elf
     spell('mana_burn', {name = 'Mana Burn', code = 'AEmb', icon = 'BTNManaBurn', kind = 'bolt', cd = 1.8, dmg = 40, count = 1,
-        countEvery = 2, range = 800, missile = FX.arcane, speed = 1200, impact = FX.manaBurn,
-        desc = 'Burns {count} enemy for {dmg} damage.'})
+        countEvery = 2, range = 800, missile = FX.arcane, speed = 1200, impact = FX.manaBurn, manaGain = 5,
+        desc = 'Burns {count} enemy for {dmg} damage, taking 5 mana from each hit.'})
     spell('metamorphosis', {name = 'Metamorphosis', code = 'AEme', icon = 'BTNMetamorphosis', kind = 'buff', cd = 35.0,
         dur = 10, per = 0.1, basePct = 0.25, trigger = 'enemies', fx = FX.avatar, scale = 1.3, dmg = 70, radius = 300,
         burstFx = FX.immolationHit,
@@ -767,6 +778,48 @@ do
                 SPELLS[key].listed = true
                 SPELL_ORDER[#SPELL_ORDER + 1] = key
             end
+        end
+    end
+
+    ---------------------------------------------------------------------------
+    -- Mana costs. A spell costs what its Warcraft III ability spends per
+    -- second there (cost / cooldown, from AbilityData.slk), over its own
+    -- cooldown here, times CFG.MANA_COST_SCALE. Spells that cost much in
+    -- Warcraft III cost much here. The rate is kept between CFG.MANA_RATE_MIN
+    -- and MAX (ultimates, three-second Mirror Images); an ability with no
+    -- cooldown (arrows, Banish) counts its cost once per cast here. Auras,
+    -- orbits and passives never cast, so they are free.
+    ---------------------------------------------------------------------------
+    local MANA_DATA = {
+        AHbz = {75, 6}, AHwe = {125, 20}, AHmt = {100, 20}, AUfn = {125, 8}, AHfs = {135, 10}, AHbn = {75, 0},
+        AOcl = {120, 9}, AOfs = {0, 60}, AHtb = {75, 9}, AHtc = {90, 6}, AHav = {150, 180}, AOws = {90, 6},
+        AHhb = {65, 5}, AHds = {25, 35}, AHdr = {10, 6}, ANfb = {75, 8}, ANrf = {85, 8}, AOww = {200, 180},
+        AOwk = {75, 5}, AOmi = {100, 3}, Ablo = {40, 1}, AOsh = {100, 8}, AOsf = {75, 30}, AOeq = {150, 90},
+        ANfl = {110, 11}, AOhw = {90, 9}, ANst = {150, 180}, AOsw = {30, 6.5}, AOhx = {70, 7}, AOvd = {200, 180},
+        AEsh = {75, 8}, AUdc = {75, 6}, AUdp = {50, 15}, AUan = {175, 180}, AUdd = {250, 150}, ANht = {75, 12},
+        AUcs = {100, 10}, AUsl = {80, 4}, AUin = {175, 180}, AUdr = {25, 15}, ACfb = {75, 8}, AUim = {100, 9},
+        AUcb = {30, 6}, AEmb = {60, 7}, AEme = {150, 180}, AEbl = {50, 10}, AEfk = {100, 9}, AEer = {75, 8},
+        AEfn = {125, 20}, AEtq = {125, 60}, AEsf = {200, 180}, ANto = {200, 120}, AHfa = {8, 0}, AEst = {50, 20},
+        AEsv = {150, 180}, ANba = {6, 0}, ANdr = {50, 8}, ANch = {150, 45}, ANsi = {75, 15}, ANsg = {125, 40},
+        ANsq = {75, 25}, ANsw = {50, 70}, ANbf = {70, 10}, ANdh = {70, 12}, ANso = {85, 12}, ANlm = {150, 32},
+        ANvc = {200, 180}, ANcs = {70, 6}, ANsy = {125, 35}, ANrg = {25, 1}, ANab = {75, 12}, ANhs = {75, 0},
+        ANcr = {25, 30}, ANtm = {150, 45}, ANdo = {150, 120}, ANef = {150, 180}
+    }
+    -- Spells with no Warcraft III ability of their own: the closest one's numbers.
+    local MANA_BY_SPELL = {
+        crushing_wave = {100, 8},    -- like Shockwave
+        arcane_barrage = {100, 20},  -- like the Archmage's arcane bolts
+        raven_form = {75, 60},
+        dark_portal = {175, 180}     -- an ultimate summon, like Inferno
+    }
+    local FREE_KINDS = {passive = true, aura = true, orbit = true}
+    for _, def in pairs(SPELLS) do
+        local data = MANA_BY_SPELL[def.key] or MANA_DATA[def.code or '']
+        if data and not FREE_KINDS[def.kind] and def.cd then
+            local cost, cooldown = data[1], data[2]
+            local rate = cooldown > 0 and cost / cooldown or cost / def.cd
+            rate = math.max(CFG.MANA_RATE_MIN, math.min(CFG.MANA_RATE_MAX, rate))
+            def.mana = rate * def.cd * CFG.MANA_COST_SCALE
         end
     end
 
@@ -1187,6 +1240,7 @@ do
         attackSpeed = {per = 0.04, desc = '+{v}\037 attack speed', apply = function(s, x) s.attackSpeed = s.attackSpeed + x end},
         crit = {per = 0.02, desc = '+{v}\037 critical strike chance', apply = function(s, x) s.crit = s.crit + x end},
         cdr = {per = 0.025, desc = 'Spells recharge {v}\037 faster', apply = function(s, x) s.cdr = s.cdr + x end},
+        manaRegen = {per = 0.6, flat = true, desc = '+{v} mana per second', apply = function(s, x) s.manaRegen = s.manaRegen + x end},
         pickup = {per = 0.1, desc = '+{v}\037 pickup range', apply = function(s, x) s.pickup = s.pickup + x end},
         xp = {per = 0.05, desc = '+{v}\037 experience', apply = function(s, x) s.xp = s.xp + x end},
         area = {per = 0.03, desc = '+{v}\037 area of effect', apply = function(s, x) s.area = s.area + x end},
@@ -1200,13 +1254,13 @@ do
     local ZONE_ITEMS = {
         {{'ratc', 'Claws of Attack', 'damage'}, {'rde1', 'Ring of Protection', 'armor'}, {'bspd', 'Boots of Speed', 'move'},
             {'prvt', 'Periapt of Vitality', 'health'}, {'rlif', 'Ring of Regeneration', 'regen'}},
-        {{'gcel', 'Gloves of Haste', 'attackSpeed'}, {'hcun', 'Hood of Cunning', 'crit'}, {'rwiz', 'Sobi Mask', 'cdr'},
+        {{'gcel', 'Gloves of Haste', 'attackSpeed'}, {'hcun', 'Hood of Cunning', 'crit'}, {'rwiz', 'Sobi Mask', 'manaRegen'},
             {'mcou', 'Medallion of Courage', 'pickup'}, {'cnob', 'Circlet of Nobility', 'xp'}},
         {{'clfm', 'Cloak of Flames', 'area'}, {'modt', 'Mask of Death', 'lifesteal'}, {'brac', 'Runed Bracers', 'dr'},
             {'bgst', 'Belt of Giant Strength', 'health'}, {'lgdh', 'Legion Doom-Horn', 'move'}},
         {{'ciri', 'Robe of the Magi', 'cdr'}, {'ofro', 'Orb of Frost', 'damage'}, {'ward', 'Warsong Battle Drums', 'attackSpeed'},
             {'ajen', 'Ancient Janggo of Endurance', 'regen'}, {'evtl', 'Talisman of Evasion', 'dr'}},
-        {{'ofir', 'Orb of Fire', 'area'}, {'odef', 'Orb of Darkness', 'damage'}, {'kpin', 'Khadgar\'s Pipe of Insight', 'cdr'},
+        {{'ofir', 'Orb of Fire', 'area'}, {'odef', 'Orb of Darkness', 'damage'}, {'kpin', 'Khadgar\'s Pipe of Insight', 'manaRegen'},
             {'hval', 'Helm of Valor', 'armor'}, {'rhth', 'Khadgar\'s Gem of Health', 'health'}},
         {{'frgd', 'Frostguard', 'armor'}, {'ckng', 'Crown of Kings', 'damage'}, {'desc', 'Kelen\'s Dagger of Escape', 'move'},
             {'ssan', 'Staff of Sanctuary', 'regen'}, {'ankh', 'Ankh of Reincarnation', 'gold'}},
@@ -2351,7 +2405,7 @@ do
     -- str, agi, int and sta start as bonuses only: G.recomputeStats adds the
     -- hero's own attributes for its level once every bonus is in.
     function G.baseStats()
-        return {str = 0, agi = 0, int = 0, sta = 0,
+        return {str = 0, agi = 0, int = 0, sta = 0, maxMana = 0, manaRegen = 0,
             damage = 0, attackSpeed = 0, cdr = 0, area = 0, move = 0, maxHp = 0, regen = 0, armor = 0,
             crit = 0.05, critMult = 1.75, lifesteal = 0, pickup = 0, xp = 0, gold = 0, luck = 0, dodge = 0,
             thorns = 0, multishot = 0, duration = 0, dr = 0, cleave = 0, bash = 0, bashDamage = 0,
@@ -2376,6 +2430,8 @@ do
         end
         -- 5 percent faster per rank, compounding: never reaches zero.
         v.cd = (def.cd or 1) * 0.95 ^ r * (1 - math.min(0.6, s.cdr))
+        -- Whole mana points (MANA_DATA), a little more with every rank.
+        v.mana = def.mana and math.max(1, math.floor(def.mana * (1 + CFG.MANA_COST_PER_RANK * r) + 0.5)) or 0
         if def.kind == 'summon' and not def.split then
             -- Out for exactly one cooldown, so they cannot pile up on their own;
             -- spell duration (Persistence) lets the waves overlap. A split
@@ -2467,6 +2523,8 @@ do
         s.sta = s.sta + def.attr.str + def.gain.str * grown
         s.primary = s[def.primary]
         s.regen = s.regen + CFG.REGEN_PER_STRENGTH * s.str
+        s.maxMana = s.maxMana + CFG.MANA_PER_INTELLECT * s.int
+        s.manaRegen = s.manaRegen + CFG.MANA_REGEN_BASE + CFG.MANA_REGEN_PER_INTELLECT * s.int
         s.attackSpeed = s.attackSpeed + CFG.ATTACK_SPEED_PER_AGILITY * s.agi
         s.armor = s.armor + (def.armor or 0) + CFG.ARMOR_PER_AGILITY * s.agi
         local k = CFG.SPELL_POWER_PER_POINT
@@ -2489,6 +2547,15 @@ do
                 SetWidgetLife(hero, math.min(life, maxHp))
             end
         end
+        -- Mana is the script's own (R.mana); a bigger pool fills by the
+        -- difference, like health.
+        if R.maxMana == nil then
+            R.mana = s.maxMana
+        elseif s.maxMana > R.maxMana then
+            R.mana = R.mana + (s.maxMana - R.maxMana)
+        end
+        R.maxMana = s.maxMana
+        R.mana = math.min(R.mana, s.maxMana)
         BlzSetUnitArmor(hero, s.armor)
         R.moveSpeed = R.baseMove * (1 + s.move)
         R.pickupRange = CFG.BASE_PICKUP * (1 + s.pickup)
@@ -3540,7 +3607,9 @@ do
             G.dropPickup('magnet', x, y, 0)
         elseif roll < 0.014 then
             G.dropPickup('heal', x, y, 0)
-        elseif roll < 0.07 then
+        elseif roll < 0.026 then
+            G.dropPickup('mana', x, y, 0)
+        elseif roll < 0.08 then
             G.dropPickup('gold', x, y, GetRandomInt(1, 3))
         end
         if info.elite then
@@ -3671,6 +3740,8 @@ do
         BlzSetSpecialEffectZ(fx, G.groundZ(x, y) + 25)
         if kind == 'heal' then
             BlzSetSpecialEffectColor(fx, 255, 80, 80)
+        elseif kind == 'mana' then
+            BlzSetSpecialEffectColor(fx, 150, 110, 255)
         elseif kind == 'magnet' then
             BlzSetSpecialEffectColor(fx, 90, 170, 255)
         end
@@ -3685,6 +3756,9 @@ do
         elseif p.kind == 'heal' then
             G.heal(BlzGetUnitMaxHP(R.hero) * 0.25)
             DestroyEffect(AddSpecialEffectTarget(FX.healingWave, R.hero, 'origin'))
+        elseif p.kind == 'mana' then
+            G.addMana(R.maxMana * CFG.MANA_RUNE)
+            DestroyEffect(AddSpecialEffectTarget(FX.manaFlareHit, R.hero, 'origin'))
         elseif p.kind == 'magnet' then
             R.magnetUntil = R.time + 3.0
             Hud.banner('Every gem flies to you!')
@@ -3980,6 +4054,9 @@ do
         if def.leech then
             G.heal(v.dmg * def.leech)
         end
+        if def.manaGain then
+            G.addMana(def.manaGain)
+        end
         if bounces and bounces > 0 then
             hitSet = hitSet or {}
             hitSet[u] = true
@@ -4220,6 +4297,9 @@ do
                 end
                 if def.leech then
                     G.heal(v.dmg * def.leech)
+                end
+                if def.manaGain then
+                    G.addMana(def.manaGain)
                 end
             end
             return true
@@ -4592,10 +4672,16 @@ do
                     inst.cd = inst.cd - dt
                 end
                 -- A split hero (Storm, Earth and Fire) casts nothing until it merges.
-                if inst.cd <= 0 and R.split then
+                -- A spell turned off, or short of mana, stays ready and waits.
+                inst.waiting = false
+                if inst.cd <= 0 and (R.split or inst.off) then
                     inst.cd = 0
+                elseif inst.cd <= 0 and R.mana < inst.v.mana then
+                    inst.cd = 0
+                    inst.waiting = true
                 elseif inst.cd <= 0 then
                     if CAST[kind](inst, inst.v) then
+                        R.mana = R.mana - inst.v.mana
                         inst.cd = inst.v.cd
                         -- A standing hero shows the cast (Spell, Spell Slam, ...).
                         if R and not R.ended then
@@ -4613,6 +4699,25 @@ do
                 return
             end
         end
+    end
+
+    function G.addMana(amount)
+        R.mana = math.max(0, math.min(R.maxMana, R.mana + amount))
+    end
+
+    -- Spells that cast (not auras, orbits or passives) can be turned off,
+    -- so a cheap spell does not take all the mana from the others.
+    function G.canToggle(inst)
+        return inst ~= nil and not FREE_KINDS[inst.def.kind]
+    end
+
+    function G.toggleSpell(i)
+        local inst = R and not R.ended and R.spells[i]
+        if not G.canToggle(inst) then
+            return
+        end
+        inst.off = not inst.off
+        Hud.refreshSlotStates()
     end
 
     function G.learnSpell(key, power)
@@ -4889,6 +4994,7 @@ do
         if s.regen > 0 and life > 0.405 then
             SetWidgetLife(R.hero, math.min(BlzGetUnitMaxHP(R.hero), life + s.regen * dt))
         end
+        G.addMana(s.manaRegen * dt)
         local invulnerable = R.time < R.invulnUntil
         if invulnerable ~= R.invulnerable then
             R.invulnerable = invulnerable
@@ -5383,8 +5489,15 @@ do
             get = function(s) return s.armor, U.num(s.armor) end},
         {label = 'Attack damage', code = 'AOae', icon = 'BTNCommand', base = function(h) return h.damage + h.attr[h.primary] end,
             get = function(s) return s.attackDamage, statWhole(s.attackDamage) end},
-        {label = 'Spell power', code = 'AHab', icon = 'BTNBrilliance',
+        -- No code: Sorceress training's own art starts with the Adept icon,
+        -- which the trimmed game data does not have.
+        {label = 'Spell power', icon = 'BTNSorceressMaster',
             get = function(s) return s.spellPower - 1, statBonus(s.spellPower - 1) end},
+        {label = 'Mana', code = 'ANms', icon = 'BTNNeutralManaShield', base = function(h) return CFG.MANA_PER_INTELLECT * h.attr.int end,
+            get = function(s) return s.maxMana, statWhole(s.maxMana) end},
+        {label = 'Mana regeneration', code = 'AHab', icon = 'BTNBrilliance',
+            base = function(h) return CFG.MANA_REGEN_BASE + CFG.MANA_REGEN_PER_INTELLECT * h.attr.int end,
+            get = function(s) return s.manaRegen, U.num(s.manaRegen) .. ' /s' end},
         {label = 'Damage bonus', code = 'AEar', icon = 'BTNTrueShot', get = function(s) return s.damage, statBonus(s.damage) end},
         {label = 'Attack speed', bless = 'ferocity', get = function(s) return s.attackSpeed, statBonus(s.attackSpeed) end},
         {label = 'Critical chance', bless = 'precision', base = 0.05, get = function(s) return s.crit, statPct(s.crit) end},
@@ -5528,11 +5641,16 @@ do
         Hud.slotTop = slotTop
         for i = 1, CFG.SPELL_SLOTS do
             local sx = x0 + (i - 1) * (size + gap)
-            -- Hovering a slot shows what its spell does (Hud.spellTip).
-            local slot = UI.icon(root, TEX.white, sx, slotTop, size, nil, function()
+            -- Hovering a slot shows what its spell does (Hud.spellTip);
+            -- clicking turns the spell off or on (G.toggleSpell).
+            local slot = UI.icon(root, TEX.white, sx, slotTop, size, function()
+                G.toggleSpell(i)
+                Hud.spellTip(i)
+            end, function()
                 Hud.spellTip(i)
             end, Hud.hideTip)
             slot.shade = UI.box(root, sx, slotTop, size, size, 0, 0, 0, 170)
+            slot.offText = UI.text(root, '', sx, slotTop - size * 0.34, size, 0.012 * k, 0.0082 * k, TEXT_JUSTIFY_CENTER)
             slot.rank = UI.text(root, '', sx, slotTop - size + 0.011 * k, size - 0.002 * k, 0.011 * k, 0.0078 * k, TEXT_JUSTIFY_RIGHT)
             slot.x, slot.size = sx, size
             Hud.slots[i] = slot
@@ -5628,11 +5746,20 @@ do
         local def = inst.def
         local v = inst.v or G.spellValues(def, inst.rank, inst.power, R.stats)
         local sub = KIND_NAMES[def.kind] or ''
-        if def.kind ~= 'passive' and def.kind ~= 'orbit' and def.kind ~= 'aura' and v.cd and v.cd > 0 then
-            sub = sub .. '  -  every ' .. U.num(v.cd) .. ' s'
+        local body = G.describe(def, v)
+        if G.canToggle(inst) then
+            if v.cd and v.cd > 0 then
+                sub = sub .. '  -  every ' .. U.num(v.cd) .. ' s'
+            end
+            if v.mana > 0 then
+                sub = sub .. '  -  ' .. U.col('8fb4ff', v.mana .. ' mana')
+            end
+            local key = Keys.label('spell' .. i)
+            body = body .. '\n' .. U.col(GREY, (inst.off and 'Turned off: click or press ' or 'Click or press ')
+                .. key .. (inst.off and ' to turn it on.' or ' to turn it off.'))
         end
         Hud.showTip(0.4 - Hud.tip.w / 2, Hud.slotTop + 0.016 * Hud.tip.k, U.spellIcon(def),
-            U.col(GOLD, def.name) .. U.col(GREY, '   rank ' .. inst.rank .. rankLimit(def.maxRank)), sub, G.describe(def, v))
+            U.col(GOLD, def.name) .. U.col(GREY, '   rank ' .. inst.rank .. rankLimit(def.maxRank)), sub, body)
     end
 
     function Hud.blessingTip(i)
@@ -5803,9 +5930,35 @@ do
         end)
     end
 
+    -- Spell slot colours: dark with OFF when turned off, blue while the
+    -- spell waits for mana (as Warcraft III shows a spell its hero cannot
+    -- pay for).
+    function Hud.refreshSlotStates()
+        if R == nil or Hud.slots == nil then
+            return
+        end
+        for i, slot in ipairs(Hud.slots) do
+            local inst = R.spells[i]
+            local state = inst and (inst.off and 'off' or (inst.waiting and 'mana' or 'ready')) or 'empty'
+            if slot.state ~= state then
+                slot.state = state
+                if state == 'off' then
+                    UI.tint(slot.img, 70, 70, 70, 255)
+                elseif state == 'mana' then
+                    UI.tint(slot.img, 90, 110, 255, 255)
+                elseif state == 'ready' then
+                    UI.tint(slot.img, 255, 255, 255, 255)
+                end
+                BlzFrameSetText(slot.offText, state == 'off' and U.col(RED, 'OFF') or '')
+            end
+        end
+    end
+
     function Hud.refreshSpells()
         for i, slot in ipairs(Hud.slots) do
             local inst = R.spells[i]
+            -- A new icon resets the tint: Hud.refreshSlotStates paints it again.
+            slot.state = nil
             if inst then
                 UI.setIcon(slot, U.spellIcon(inst.def))
                 UI.frameColor(slot, 214, 170, 90)
@@ -5885,8 +6038,7 @@ do
 
         local life, maxLife = GetWidgetLife(hero), BlzGetUnitMaxHP(hero)
         UI.setBar(Hud.health, life / math.max(1, maxLife), U.big(math.max(0, life)) .. ' / ' .. U.big(maxLife))
-        local mana = GetUnitState(hero, UNIT_STATE_MANA) or 0
-        local maxMana = GetUnitState(hero, UNIT_STATE_MAX_MANA) or 0
+        local mana, maxMana = R.mana or 0, R.maxMana or 0
         UI.setBar(Hud.mana, maxMana > 0 and mana / maxMana or 0,
             maxMana > 0 and (U.big(math.max(0, mana)) .. ' / ' .. U.big(maxMana)) or '')
         BlzFrameSetText(Hud.levelText, U.col(GOLD, tostring(R.level)))
@@ -5918,6 +6070,7 @@ do
                 end
             end
         end
+        Hud.refreshSlotStates()
 
         local index = 0
         for _, buff in pairs(R.buffs) do
@@ -6186,6 +6339,9 @@ do
             else
                 sub = def.kind == 'passive' and 'New passive' or 'New spell'
                 foot = 'Takes a spell slot  -  ' .. (#R.spells + 1) .. '/' .. CFG.SPELL_SLOTS
+            end
+            if v.mana > 0 then
+                sub = sub .. '  -  ' .. U.col('8fb4ff', v.mana .. ' mana')
             end
             desc = G.describe(def, v)
         elseif c.type == 'blessing' then
@@ -6541,6 +6697,11 @@ do
         {key = 'card3', label = 'Pick card 3', default = 51},
         {key = 'card4', label = 'Pick card 4', default = 52},
         {key = 'reroll', label = 'Reroll the cards', default = 82},
+        -- 5 to 8: the number keys after the cards (Q opens the engine's quest log).
+        {key = 'spell1', label = 'Spell 1 on or off', default = 53},
+        {key = 'spell2', label = 'Spell 2 on or off', default = 54},
+        {key = 'spell3', label = 'Spell 3 on or off', default = 55},
+        {key = 'spell4', label = 'Spell 4 on or off', default = 56},
         {key = 'stats', label = 'Show or hide the stats', default = 67},
         {key = 'play', label = 'Enter the zone (lobby)', default = 32}
     }
@@ -6775,7 +6936,8 @@ do
     -- its key. Clicking a key waits for the next key pressed (G.onKey).
     function Options.buildKeys(root)
         local x, top, w = 0.21, 0.55, 0.38
-        local rowH = 0.025
+        -- Rows shrink to keep every action on the screen.
+        local rowH = math.min(0.025, 0.33 / (#ACTIONS + 1))
         local h = 0.106 + (#ACTIONS + 1) * rowH + 0.09
         local page = optionsPage(root, 'keys', x, top, w, h, 'KEYBINDS')
         local ix, iw = x + 0.024, w - 0.048
@@ -7100,6 +7262,7 @@ do
             or (Engine.active() and 'Right-click or hold right-click to move' or 'Right-click to move')
         BlzFrameSetText(Lobby.footer, U.col(GREY, move .. '  -  attacks and spells cast themselves  -  '
             .. Keys.label('card1') .. ' ' .. Keys.label('card2') .. ' ' .. Keys.label('card3') .. ' picks a card  -  '
+            .. Keys.label('spell1') .. '-' .. Keys.label('spell4') .. ' or a click turns a spell off  -  '
             .. Keys.label('reroll') .. ' rerolls  -  ' .. Keys.label('play') .. ' to play  -  Esc for options'))
     end
 
@@ -8450,6 +8613,10 @@ do
         end
         if name == 'stats' then
             Hud.toggleStats()
+            return
+        end
+        if name:sub(1, 5) == 'spell' then
+            G.toggleSpell(tonumber(name:sub(6)))
             return
         end
         if R and R.hand then

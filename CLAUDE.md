@@ -238,7 +238,11 @@ SDK), host-authoritative, agreed balance, resource estimates. The user is still 
 - Balance and mechanics pass: `docs/balance-plan.md` (phases, decisions, what each phase changed). Phase 1
   (2026-11-01): Warcraft III attributes per hero (`HEROES` `primary`/`attr`/`gain`), Stamina health, spell power,
   attribute stat cards; tuning numbers in `CFG`. New icons must already be in `tools/web_trace_reads.txt`, or the
-  trimmed game data lacks them.
+  trimmed game data lacks them. Upgrade codes return their first level's art (Rhst gives the Sorceress Adept icon,
+  which the data lacks): name the icon file instead. Phase 2 (2026-11-01): mana. `MANA_DATA` (Warcraft III cost
+  and cooldown per ability) sets `def.mana`; `R.mana`/`R.maxMana` are the script's own (the engine has no
+  `BlzSetUnitMaxMana`); `G.updateSpells` waits for mana and skips spells turned off (`inst.off`, `G.toggleSpell`,
+  actions `spell1`-`spell4` on 5-8: Q is the engine's quest-log bind, digits are control groups but harmless).
 - Loading screens never reach `+screenshot`; capture only the game window with `PrintWindow`.
 - Test aids: `+set survivor_tab codex` opens a lobby tab; `+set survivor_menu keys` opens the options
   at a page (`main`, `audio`, `keys`, `interface`); `+set survivor_run "5 1 1 2"` (hero, zone,

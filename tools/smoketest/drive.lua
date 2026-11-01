@@ -399,6 +399,40 @@ MOCK.click('Return to Camp')
 check(#MOCK.liveTags() == 0, 'no price tag is left after the run')
 note('world objects: vein mined, chest opened for 40 gold, collision blocks')
 
+-- Mana: a spell short of mana waits, casts once the mana is there, and one
+-- turned off never casts. Every spell that casts costs mana.
+S.heroIndex, S.difficulty = 1, 1
+G.startRun()
+run = R()
+local spellInst = run.spells[1]
+check(spellInst.v.mana > 0, spellInst.def.key .. ' costs mana')
+check(run.maxMana > 0 and run.mana == run.maxMana, 'a run starts with a full mana pool')
+G.createEnemy(run.zone.enemies[1], run.hx + 200, run.hy, {})
+G.refreshEnemyCache()
+run.mana = 0
+spellInst.cd = 0
+MOCK.advance(0.1)
+check(spellInst.waiting and spellInst.cd == 0, 'a spell short of mana waits, ready')
+run.mana = run.maxMana
+MOCK.advance(0.1)
+check(spellInst.cd > 0 and not spellInst.waiting and run.mana < run.maxMana, 'it casts and pays once the mana is there')
+G.toggleSpell(1)
+check(spellInst.off, 'a click or its key turns a spell off')
+spellInst.cd = 0
+run.mana = run.maxMana
+MOCK.advance(0.5)
+check(spellInst.cd == 0 and run.mana >= run.maxMana - 0.001, 'a spell turned off never casts')
+G.toggleSpell(1)
+check(not spellInst.off, 'and back on')
+for key, def in pairs(SPELLS) do
+    if def.kind ~= 'passive' and def.kind ~= 'aura' and def.kind ~= 'orbit' then
+        check((def.mana or 0) > 0, key .. ' casts, so it costs mana')
+    end
+end
+G.endRun(false)
+MOCK.click('Return to Camp')
+note('mana: waits when short, pays when cast, stays off when turned off')
+
 -- 5. Every hero with every spell of its pool at a high rank (no rank limit).
 for index, hero in ipairs(HEROES) do
     S.heroIndex = index

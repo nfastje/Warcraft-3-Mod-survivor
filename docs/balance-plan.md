@@ -108,7 +108,27 @@ Every hero keeps its real Warcraft III numbers: base value, and gain per level.
 - The character panel shows the five stats on top (primary highlighted), derived values below.
 - Faction traits move onto the new stats (Alliance +Armor, Horde attack speed, ...).
 
-## 2. Mana (phase 2)
+## 2. Mana (phase 2, done 2026-11-01)
+
+As built (decision: Warcraft III costs, rate-matched, with spells that can be turned off):
+
+- `MANA_DATA` holds each ability's Warcraft III cost and cooldown (`AbilityData.slk`). A spell costs that
+  ability's mana per second, kept within 2.5 to 16, times its cooldown here, times 0.12
+  (`CFG.MANA_COST_SCALE`), +6 percent per rank. Abilities without a cooldown (arrows, Banish) count their
+  cost once per cast. `MANA_BY_SPELL` covers spells with no ability of their own (Medivh's, Crushing
+  Wave). Auras, orbits and passives never cast and are free.
+- Pool 15 per Intellect, regeneration 1 + 0.05 per Intellect per second (`CFG.MANA_*`). Every hero can
+  keep its starting spell going at level 1 (Lich: Frost Nova 1.80 per second against 2.00).
+- A spell short of mana stays ready and waits (its slot turns blue). Clicking a slot or pressing 5 to 8
+  turns a spell off (dark, "OFF") so the others get the mana.
+- Mana sources: violet mana runes (30 percent of the pool), Brilliance Aura (+0.8 mana per second per
+  rank instead of spell haste, as in Warcraft III), Siphon Life (4 mana per enemy), Mana Burn (5 per hit),
+  Sobi Mask and Khadgar's Pipe of Insight (mana regeneration instead of spell haste).
+- HUD: the mana bar shows the script's pool; spell cards and tooltips show the cost; the stats panel
+  adds Mana and Mana regeneration, and Spell power moves to the Sorceress Master icon.
+- The smoke test checks waiting, paying, turning off, and that every casting spell has a cost.
+
+Planned:
 
 - Every active spell costs mana. Auras and passives are free.
 - **Cost** = the ability's Warcraft III cost x about 0.25 x (1 + 0.06 per rank above 1). Spells with no
