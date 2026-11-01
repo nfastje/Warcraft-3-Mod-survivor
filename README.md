@@ -33,8 +33,12 @@ downloads about 200 mo of game data, once.
   Horde, Gurubashi trolls, Fel Horde, naga...), four bosses and a final boss. Win a zone to open
   the next.
 - **Difficulties**: Normal, Heroic, Mythic and Mythic+, with keystone levels that never end.
-- **Between runs**: gear dropped by bosses (Armory), talents bought with gold, 25 achievements
+- **Between runs**: gear dropped by bosses (Armory), talents bought with gold, achievements
   and their rewards, and a Codex of every spell and blessing.
+- **Earned progression**: you start with four heroes (Archmage, Blademaster, Death Knight, Demon
+  Hunter) and five talents (Strength, Agility, Intellect, Stamina, Armor). The other heroes join as
+  you play: survive five minutes, slay a boss, win with their faction, or clear zones for the Tavern.
+  The other talents open with achievements.
 - A damage meter, floating damage numbers, rebindable keys, mouse or keyboard movement, and
   separate volume for music, spells, units and ambience.
 

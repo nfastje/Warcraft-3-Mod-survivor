@@ -149,7 +149,24 @@ Storm Bolt 75, Thunder Clap 90, Chain Lightning 120, Shockwave 100, Death Coil 7
 Frost Nova 125, Impale 100, Entangling Roots 75, Forked Lightning 110, Breath of Fire 70, Soul Burn 85,
 Rain of Fire 85, Immolation 25.
 
-## 3. Unlocks and progression (phase 3)
+## 3. Unlocks and progression (phase 3, done 2026-11-01)
+
+As built, following the tables below:
+
+- `TALENTS`: Strength, Agility, Intellect (+2 per rank), Stamina (+2), Armor (+1) open from the start;
+  the others carry `unlock` (an achievement key) and show "Opens with ..." and a Locked button until it is
+  earned. Clarity is new (+0.3 mana per second per rank). Might and Vitality are gone: a save that bought
+  them gets the gold back on load. Haste moved to the Bloodlust icon (the Sobi Mask is Clarity's now).
+- Heroes carry `unlock` too, set after the achievements: new "<Hero> Joins" achievements (survive 5:00 with
+  the faction's first hero, a boss with its second; 10 and 15 points), the faction's "For the ...!" win for
+  the fourth, the zone achievements in `ZONE_ORDER` for the Tavern. The profile keeps `heroTime` (longest run
+  per hero) and `heroBosses`. Locked heroes are dim in the grid; selecting one shows LOCKED HERO and its
+  requirement, and neither the button nor Space starts a run. Random Hero picks among open heroes.
+- Ascendant asks for level 25 (was 30).
+- The smoke test checks the starting four heroes and five talents, that a locked hero cannot enter a zone,
+  and what the first win opens.
+
+Planned:
 
 ### Talents
 

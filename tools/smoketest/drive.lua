@@ -112,6 +112,25 @@ check(R() == nil, 'space is ignored while options are open')
 MOCK.tap(OSKEY_ESCAPE)
 check(not MOCK.findText('Esc closes this menu'), 'escape closes options')
 
+-- Unlocks on a fresh profile: four heroes (one per main faction) and the
+-- five base talents. A hero that has not joined cannot enter a zone.
+local openHeroes, openTalents = {}, 0
+for index, hero in ipairs(HEROES) do
+    if Profile.heroOpen(hero) then openHeroes[#openHeroes + 1] = hero.id end
+end
+for _, talent in ipairs(upvalue(Profile.applyBonuses, 'TALENTS')) do
+    if Profile.talentOpen(talent) then openTalents = openTalents + 1 end
+end
+table.sort(openHeroes)
+check(table.concat(openHeroes, ' ') == 'Edem Hamg Obla Udea', 'starting heroes: ' .. table.concat(openHeroes, ' '))
+check(openTalents == 5, 'five talents open at the start, got ' .. openTalents)
+for index, hero in ipairs(HEROES) do
+    if hero.id == 'Hmkg' then S.heroIndex = index end
+end
+MOCK.tap(OSKEY_SPACE)
+check(R() == nil, 'a locked hero cannot enter a zone')
+S.heroIndex = 1
+
 -- 1. Normal run to victory.
 MOCK.tap(OSKEY_SPACE)
 check(R() ~= nil, 'space starts a run')
@@ -237,6 +256,22 @@ note(string.format('endless: %.0f s, health x%.2f, +%d kills, +%d bosses', run.t
     run.kills - killsBanked, run.bosses - bossesBefore))
 MOCK.click('Return to Camp')
 check(R() == nil and S.screen == 'lobby', 'back in lobby')
+-- The Archmage's win opens the Mountain King (5:00 survived), the Blood
+-- Mage (an Alliance win), Naga (the first zone cleared) and two talents.
+local function heroById(id)
+    for _, hero in ipairs(HEROES) do
+        if hero.id == id then return hero end
+    end
+end
+for _, id in ipairs({'Hmkg', 'Hblm', 'Nngs'}) do
+    check(Profile.heroOpen(heroById(id)), id .. ' joins after the win')
+end
+check(not Profile.heroOpen(heroById('Hpal')), 'the Paladin waits for a boss slain with the Mountain King')
+for _, talent in ipairs(upvalue(Profile.applyBonuses, 'TALENTS')) do
+    if talent.key == 'swiftness' or talent.key == 'magnetism' then
+        check(Profile.talentOpen(talent), talent.key .. ' opens after the win')
+    end
+end
 note('profile after win: zoneDiff1=' .. tostring(Profile.data.zoneDiff['1']) .. ' unlocked=' .. Profile.data.unlocked
     .. ' gold=' .. Profile.data.gold .. ' gear=' .. (function() local n = 0 for _ in pairs(Profile.data.gear) do n = n + 1 end return n end)())
 

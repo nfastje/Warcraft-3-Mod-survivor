@@ -846,7 +846,7 @@ do
             desc = '+{v} armor', apply = function(s, x) s.armor = s.armor + x end},
         {key = 'ferocity', name = 'Ferocity', code = 'gcel', icon = 'BTNGlove', per = 0.12,
             desc = '+{v}\037 attack speed', apply = function(s, x) s.attackSpeed = s.attackSpeed + x end},
-        {key = 'haste', name = 'Haste', code = 'rwiz', icon = 'BTNSobiMask', per = 0.06,
+        {key = 'haste', name = 'Haste', code = 'Ablo', icon = 'BTNBloodLust', per = 0.06,
             desc = 'Spells recharge {v}\037 faster', apply = function(s, x) s.cdr = s.cdr + x end},
         {key = 'reach', name = 'Reach', code = 'ofir', icon = 'BTNOrbOfFire', per = 0.12,
             desc = '+{v}\037 area of effect', apply = function(s, x) s.area = s.area + x end},
@@ -1382,31 +1382,43 @@ do
     -- Meta progression
     ---------------------------------------------------------------------------
     -- Talents are bought with gold earned in runs. They apply to every hero.
+    -- The five base stats are open from the start; every other talent opens
+    -- with the achievement named in unlock (Profile.talentOpen).
     local TALENTS = {
-        {key = 'might', name = 'Might', code = 'ratc', icon = 'BTNClawsOfAttack', per = 0.04, max = 5, desc = '+{v}\037 damage',
-            apply = function(s, x) s.damage = s.damage + x end},
-        {key = 'vitality', name = 'Vitality', code = 'prvt', icon = 'BTNPeriapt', per = 30, flat = true, max = 5, desc = '+{v} maximum health',
-            apply = function(s, x) s.maxHp = s.maxHp + x end},
-        {key = 'swiftness', name = 'Swiftness', code = 'bspd', icon = 'BTNBootsOfSpeed', per = 0.03, max = 5, desc = '+{v}\037 movement speed',
-            apply = function(s, x) s.move = s.move + x end},
-        {key = 'haste', name = 'Haste', code = 'rwiz', icon = 'BTNSobiMask', per = 0.03, max = 5, desc = 'Spells recharge {v}\037 faster',
-            apply = function(s, x) s.cdr = s.cdr + x end},
-        {key = 'wisdom', name = 'Wisdom', code = 'tkno', icon = 'BTNTome', per = 0.06, max = 5, desc = '+{v}\037 experience',
-            apply = function(s, x) s.xp = s.xp + x end},
-        {key = 'greed', name = 'Greed', code = 'pghe', icon = 'BTNChestOfGold', per = 0.10, max = 5, desc = '+{v}\037 gold',
-            apply = function(s, x) s.gold = s.gold + x end},
-        {key = 'magnetism', name = 'Magnetism', code = 'mcou', icon = 'BTNMedalionOfCourage', per = 0.15, max = 5, desc = '+{v}\037 pickup range',
-            apply = function(s, x) s.pickup = s.pickup + x end},
-        {key = 'precision', name = 'Precision', code = 'AOcr', icon = 'BTNCriticalStrike', per = 0.02, max = 5, desc = '+{v}\037 critical strike',
-            apply = function(s, x) s.crit = s.crit + x end},
-        {key = 'regeneration', name = 'Regeneration', code = 'rlif', icon = 'BTNRingGreen', per = 0.3, flat = true, max = 5, desc = '+{v} health per second',
-            apply = function(s, x) s.regen = s.regen + x end},
-        {key = 'armor', name = 'Toughness', code = 'rde1', icon = 'BTNRingJadeFalcon', per = 1, flat = true, max = 5, desc = '+{v} armor',
-            apply = function(s, x) s.armor = s.armor + x end},
-        {key = 'siphon', name = 'Siphon Life', code = 'AUav', icon = 'BTNVampiricAura', per = 0.01, max = 5,
+        {key = 'strength', name = 'Strength', code = 'rst1', icon = 'BTNGauntletsOfOgrePower', per = 2, flat = true, max = 5,
+            desc = '+{v} Strength', apply = function(s, x) s.str = s.str + x end},
+        {key = 'agility', name = 'Agility', code = 'hcun', icon = 'BTNHoodOfCunning', per = 2, flat = true, max = 5,
+            desc = '+{v} Agility', apply = function(s, x) s.agi = s.agi + x end},
+        {key = 'intellect', name = 'Intellect', code = 'ciri', icon = 'BTNRobeOfTheMagi', per = 2, flat = true, max = 5,
+            desc = '+{v} Intellect', apply = function(s, x) s.int = s.int + x end},
+        {key = 'stamina', name = 'Stamina', code = 'prvt', icon = 'BTNPeriapt', per = 2, flat = true, max = 5,
+            desc = '+{v} Stamina', apply = function(s, x) s.sta = s.sta + x end},
+        {key = 'armor', name = 'Armor', code = 'rde1', icon = 'BTNRingJadeFalcon', per = 1, flat = true, max = 5,
+            desc = '+{v} armor', apply = function(s, x) s.armor = s.armor + x end},
+        {key = 'swiftness', name = 'Swiftness', code = 'bspd', icon = 'BTNBootsOfSpeed', per = 0.03, max = 5, unlock = 'survivor',
+            desc = '+{v}\037 movement speed', apply = function(s, x) s.move = s.move + x end},
+        {key = 'precision', name = 'Precision', code = 'AOcr', icon = 'BTNCriticalStrike', per = 0.02, max = 5, unlock = 'slayer',
+            desc = '+{v}\037 critical strike', apply = function(s, x) s.crit = s.crit + x end},
+        {key = 'haste', name = 'Haste', code = 'Ablo', icon = 'BTNBloodLust', per = 0.03, max = 5, unlock = 'ascendant',
+            desc = 'Spells recharge {v}\037 faster', apply = function(s, x) s.cdr = s.cdr + x end},
+        {key = 'clarity', name = 'Clarity', code = 'rwiz', icon = 'BTNSobiMask', per = 0.3, flat = true, max = 5, unlock = 'veteran',
+            desc = '+{v} mana per second', apply = function(s, x) s.manaRegen = s.manaRegen + x end},
+        {key = 'regeneration', name = 'Regeneration', code = 'rlif', icon = 'BTNRingGreen', per = 0.3, flat = true, max = 5,
+            unlock = 'boss_hunter', desc = '+{v} health per second', apply = function(s, x) s.regen = s.regen + x end},
+        {key = 'wisdom', name = 'Wisdom', code = 'tkno', icon = 'BTNTome', per = 0.06, max = 5, unlock = 'scholar',
+            desc = '+{v}\037 experience', apply = function(s, x) s.xp = s.xp + x end},
+        {key = 'magnetism', name = 'Magnetism', code = 'mcou', icon = 'BTNMedalionOfCourage', per = 0.15, max = 5, unlock = 'zone1',
+            desc = '+{v}\037 pickup range', apply = function(s, x) s.pickup = s.pickup + x end},
+        {key = 'greed', name = 'Greed', code = 'pghe', icon = 'BTNChestOfGold', per = 0.10, max = 5, unlock = 'hoarder',
+            desc = '+{v}\037 gold', apply = function(s, x) s.gold = s.gold + x end},
+        {key = 'siphon', name = 'Siphon Life', code = 'AUav', icon = 'BTNVampiricAura', per = 0.01, max = 5, unlock = 'heroic',
             desc = 'Attacks and spells heal for {v}\037 of their damage',
             apply = function(s, x) s.lifesteal = s.lifesteal + x end}
     }
+    local TALENT_BY_KEY = {}
+    for _, talent in ipairs(TALENTS) do
+        TALENT_BY_KEY[talent.key] = talent
+    end
     local function talentCost(rank)
         return math.floor(60 * rank ^ 1.6 + 0.5)
     end
@@ -1493,8 +1505,8 @@ do
         function(p) return maxValue(p.endless), 1200 end)
     achievement('deathless_hour', 'Deathless', 'Reach 30:00 in endless mode.', 'AHds', 'BTNDivineIntervention', 40,
         function(p) return maxValue(p.endless), 1800 end)
-    achievement('ascendant', 'Ascendant', 'Reach level 30 in a single run.', 'AHab', 'BTNBrilliance', 15,
-        function(p) return p.bestLevel, 30 end)
+    achievement('ascendant', 'Ascendant', 'Reach level 25 in a single run.', 'AHab', 'BTNBrilliance', 15,
+        function(p) return p.bestLevel, 25 end)
     achievement('veteran', 'Veteran', 'Play 25 runs.', 'AOsh', 'BTNShockWave', 10,
         function(p) return p.runs, 25 end)
     achievement('hoarder', 'Hoarder', 'Earn 5,000 gold in total.', 'pghe', 'BTNChestOfGold', 15,
@@ -1511,6 +1523,37 @@ do
         function(p) return maxValue(p.keyBest), 15 end)
     achievement('keystone_hero', 'Keystone Hero', 'Reach a Mythic+ rating of 1,500.', 'AOvd', 'BTNBigBadVoodooSpell', 60,
         function(p) return keystoneRating(p), 1500 end)
+
+    -- Heroes: the first of each faction is open from the start, the others
+    -- join in a chain: survive 5:00 with the first, defeat a boss with the
+    -- second, win a run with the faction. Tavern heroes join one per zone
+    -- cleared, in play order. hero.unlock is the achievement that opens it.
+    for fi, faction in ipairs(FACTIONS) do
+        local list = {}
+        for _, hero in ipairs(HEROES) do
+            if hero.faction == faction.key then
+                list[#list + 1] = hero
+            end
+        end
+        if faction.key == 'Tavern' then
+            for i, hero in ipairs(list) do
+                hero.unlock = 'zone' .. ZONE_ORDER[i]
+            end
+        else
+            local first, second, third = list[1], list[2], list[3]
+            achievement('join_' .. second.id, second.name .. ' Joins', 'Survive 5:00 with the ' .. first.name .. '.',
+                '', second.icon, 10, function(p) return p.heroTime[first.id] or 0, 300 end)
+            second.unlock = 'join_' .. second.id
+            achievement('join_' .. third.id, third.name .. ' Joins', 'Defeat a boss with the ' .. second.name .. '.',
+                '', third.icon, 15, function(p) return p.heroBosses[second.id] or 0, 1 end)
+            third.unlock = 'join_' .. third.id
+            list[4].unlock = 'faction' .. fi
+        end
+    end
+    local ACH_BY_KEY = {}
+    for _, a in ipairs(ACHIEVEMENTS) do
+        ACH_BY_KEY[a.key] = a
+    end
 
     ---------------------------------------------------------------------------
     -- Utilities
@@ -1661,6 +1704,8 @@ do
     function Profile.new()
         return {gold = 0, goldTotal = 0, kills = 0, runs = 0, wins = 0, bosses = 0, bestLevel = 0, unlocked = 1,
             zoneWins = {}, zoneBest = {}, heroWins = {}, factionWins = {}, diffWins = {},
+            -- heroTime: hero id -> longest run in seconds; heroBosses: bosses it slew.
+            heroTime = {}, heroBosses = {},
             -- zoneDiff: best difficulty cleared per zone (4 = a Mythic+ key).
             -- keyMax: highest keystone a zone may be started at; keyBest: best timed.
             zoneDiff = {}, keyMax = {}, keyBest = {},
@@ -1729,6 +1774,15 @@ do
             p.zones = 2
         end
         p.unlocked = U.clamp(p.unlocked, 1, #ZONES)
+        -- Talents that no longer exist (Might, Vitality) give their gold back.
+        for key, rank in pairs(p.talents) do
+            if TALENT_BY_KEY[key] == nil then
+                for r = 1, rank do
+                    p.gold = p.gold + talentCost(r)
+                end
+                p.talents[key] = nil
+            end
+        end
         -- Saves from before the inventory carry their six best items.
         if next(p.inv) == nil and next(p.gear) ~= nil then
             local owned = {}
@@ -1763,6 +1817,21 @@ do
 
     function Profile.talent(key)
         return Profile.data.talents[key] or 0
+    end
+
+    -- Talents and heroes with an unlock open once that achievement is earned.
+    function Profile.talentOpen(talent)
+        return talent.unlock == nil or Profile.data.ach[talent.unlock] ~= nil
+    end
+
+    function Profile.heroOpen(hero)
+        return hero.unlock == nil or Profile.data.ach[hero.unlock] ~= nil
+    end
+
+    -- How to open a locked talent or hero: its achievement's own words.
+    function Profile.unlockText(unlock)
+        local a = ACH_BY_KEY[unlock]
+        return a and (a.name .. ': ' .. a.desc) or ''
     end
 
     function Profile.points()
@@ -5341,6 +5410,8 @@ do
         p.goldTotal = p.goldTotal + gold
         p.kills = p.kills + R.kills - banked.kills
         p.bosses = p.bosses + R.bosses - banked.bosses
+        p.heroTime[R.def.id] = math.max(p.heroTime[R.def.id] or 0, math.floor(R.time))
+        Profile.inc(p.heroBosses, R.def.id, R.bosses - banked.bosses)
         if not R.endless then
             p.runs = p.runs + 1
         end
@@ -7590,16 +7661,29 @@ do
         end, 'dark', 0.0088)
         C.keyHint = UI.text(page, '', dx - 0.1, by - bh - 0.003, sw + 0.2, 0.011, 0.0066, TEXT_JUSTIFY_CENTER)
         C.enter = UI.button(page, ex, by, ew, bh, '', function()
-            G.startRun()
+            Lobby.enter()
         end, 'red', 0.0155)
         UI.place(C.enter.label, ex, by - 0.004, ew, 0.022)
         C.enterSub = UI.text(page, '', ex, by - 0.027, ew, 0.013, 0.0074, TEXT_JUSTIFY_CENTER)
         C.random = UI.button(page, ex + ew + gap, by, sw, bh, 'Random Hero', function()
-            S.heroIndex = GetRandomInt(1, #HEROES)
+            local open = {}
+            for index, hero in ipairs(HEROES) do
+                if Profile.heroOpen(hero) then
+                    open[#open + 1] = index
+                end
+            end
+            S.heroIndex = open[GetRandomInt(1, #open)]
             S.faction = HEROES[S.heroIndex].faction
             Lobby.updatePreview()
             Lobby.refresh()
         end, 'dark', 0.0102)
+    end
+
+    -- Enter Zone (button or key): only with a hero that has joined.
+    function Lobby.enter()
+        if Profile.heroOpen(HEROES[S.heroIndex]) then
+            G.startRun()
+        end
     end
 
     function Lobby.paintCell(cell)
@@ -7811,10 +7895,12 @@ do
             local index = list[i]
             cell.heroIndex = index
             if index then
-                UI.setIcon(cell.icon, U.heroIcon(HEROES[index]))
+                -- A hero that has not joined yet is dim, its name grey.
+                local open = Profile.heroOpen(HEROES[index])
+                UI.setIcon(cell.icon, U.heroIcon(HEROES[index]), not open)
                 -- Grid labels hold one line: long names use their short form.
                 local label = HEROES[index].short or HEROES[index].name
-                BlzFrameSetText(cell.name, index == S.heroIndex and U.col(GOLD, label) or label)
+                BlzFrameSetText(cell.name, index == S.heroIndex and U.col(GOLD, label) or (open and label or U.col('6e665c', label)))
                 UI.showIcon(cell.icon, true)
                 BlzFrameSetVisible(cell.name, true)
             else
@@ -7921,11 +8007,17 @@ do
         else
             BlzFrameSetText(C.keyHint, '')
         end
-        UI.setLabel(C.enter, U.col(GOLD, 'ENTER ' .. zone.name:upper()))
         local sub = zone.subtitle .. '  -  ' .. zone.final.name .. ' awaits at ' .. U.time(CFG.RUN_LENGTH)
         if keystone then
             sub = 'Keystone +' .. diff.level .. '  -  ' .. zone.final.name .. ' awaits at ' .. U.time(CFG.RUN_LENGTH)
         end
+        if Profile.heroOpen(hero) then
+            UI.setLabel(C.enter, U.col(GOLD, 'ENTER ' .. zone.name:upper()))
+        else
+            UI.setLabel(C.enter, U.col(GREY, 'LOCKED HERO'))
+            sub = Profile.unlockText(hero.unlock)
+        end
+        UI.setEnabled(C.enter, Profile.heroOpen(hero))
         BlzFrameSetText(C.enterSub, U.col(GREY, sub))
         Lobby.renderDifficulty()
     end
@@ -8296,19 +8388,20 @@ do
         UI.card(page, x, top0, w, LAY.h, 'TALENTS')
         T.info = UI.text(page, '', ix, top0 - 0.042, iw, 0.013, 0.0078, TEXT_JUSTIFY_CENTER)
         local rowW = (iw - LAY.gap) / 2
-        local rowH = 0.046
+        -- Seven rows of two fit above the refund button.
+        local rowH = 0.044
         for i, talent in ipairs(TALENTS) do
             local column = math.fmod(i - 1, 2)
             local row = (i - 1) // 2
             local rx = ix + column * (rowW + LAY.gap)
-            local top = top0 - 0.064 - row * 0.05
+            local top = top0 - 0.062 - row * 0.047
             local o = {}
             well(page, rx, top, rowW, rowH)
             o.icon = UI.icon(page, U.icon(talent.code, talent.icon), rx + 0.01, top - 0.007, 0.032)
             local textW = rowW - 0.052 - 0.1
             o.name = UI.text(page, '', rx + 0.052, top - 0.003, textW, 0.016, 0.0102)
-            o.rank = UI.text(page, '', rx + 0.052, top - 0.018, textW, 0.012, 0.0072)
-            o.desc = UI.text(page, '', rx + 0.052, top - 0.03, textW, 0.014, 0.0074)
+            o.rank = UI.text(page, '', rx + 0.052, top - 0.016, textW, 0.012, 0.0072)
+            o.desc = UI.text(page, '', rx + 0.052, top - 0.027, textW, 0.014, 0.0074)
             -- Hovering the row shows what every rank gives; the buy button
             -- is made after, so it stays on top and clickable.
             UI.hit(page, rx, top, rowW, rowH, nil, function()
@@ -8322,7 +8415,7 @@ do
             end, 'green', 0.0092)
             T.rows[i] = o
         end
-        T.refund = UI.button(page, 0.4 - 0.08, LAY.bottom + 0.054, 0.16, 0.028, 'Refund all talents', function()
+        T.refund = UI.button(page, 0.4 - 0.08, LAY.bottom + 0.03, 0.16, 0.026, 'Refund all talents', function()
             local p = Profile.data
             for _, talent in ipairs(TALENTS) do
                 for rank = 1, Profile.talent(talent.key) do
@@ -8342,6 +8435,9 @@ do
         local talent = TALENTS[i]
         local rank = Profile.talent(talent.key)
         local lines = {'Each rank: ' .. G.describeBlessing(talent, talent.per)}
+        if not Profile.talentOpen(talent) then
+            lines[#lines + 1] = U.col(RED, 'Locked.') .. ' Opens with ' .. U.col(GOLD, Profile.unlockText(talent.unlock))
+        end
         if rank > 0 then
             lines[#lines + 1] = 'Now: ' .. G.describeBlessing(talent, talent.per * rank)
         end
@@ -8364,7 +8460,7 @@ do
             if talent.key == key then
                 local rank = Profile.talent(key)
                 local cost = talentCost(rank + 1)
-                if rank < talent.max and Profile.data.gold >= cost then
+                if Profile.talentOpen(talent) and rank < talent.max and Profile.data.gold >= cost then
                     Profile.data.gold = Profile.data.gold - cost
                     Profile.data.talents[key] = rank + 1
                     Profile.save()
@@ -8382,11 +8478,20 @@ do
         for i, talent in ipairs(TALENTS) do
             local o = T.rows[i]
             local rank = Profile.talent(talent.key)
-            BlzFrameSetText(o.name, U.col(GOLD, talent.name))
+            local open = Profile.talentOpen(talent)
+            UI.setIcon(o.icon, U.icon(talent.code, talent.icon), not open)
+            BlzFrameSetText(o.name, U.col(open and GOLD or '6e665c', talent.name))
             BlzFrameSetText(o.rank, U.col(GREY, 'Rank ') .. rank .. ' / ' .. talent.max)
             local current = rank > 0 and G.describeBlessing(talent, talent.per * rank) or U.col(GREY, 'Not learned')
+            -- A locked talent names the achievement that opens it.
+            if not open then
+                current = U.col(GREY, 'Opens with ' .. ACH_BY_KEY[talent.unlock].name)
+            end
             BlzFrameSetText(o.desc, current)
-            if rank >= talent.max then
+            if not open then
+                UI.setLabel(o.buy, 'Locked')
+                UI.setEnabled(o.buy, false)
+            elseif rank >= talent.max then
                 UI.setLabel(o.buy, 'Max')
                 UI.setEnabled(o.buy, false)
             else
@@ -8697,7 +8802,7 @@ do
                 Cards.pick(tonumber(name:sub(5)))
             end
         elseif R == nil and S.screen == 'lobby' and S.tab == 'character' and name == 'play' then
-            G.startRun()
+            Lobby.enter()
         end
     end
 
