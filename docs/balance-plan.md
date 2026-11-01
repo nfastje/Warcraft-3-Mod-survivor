@@ -40,11 +40,12 @@ As built:
 - `HEROES` carries `primary`, `attr` (level 1), `gain` (per level), `damage` (the weapon: weapon plus the
   primary attribute equals the old level 1 attack) and `armor`. Tuning numbers are in `CFG` (`HP_BASE`,
   `HP_PER_STAMINA`, `REGEN_PER_STRENGTH`, `ATTACK_SPEED_PER_AGILITY`, `ARMOR_PER_AGILITY`,
-  `SPELL_POWER_PER_POINT`, `STACK_FALLOFF`).
+  `SPELL_POWER_PER_POINT`; `STACK_FALLOFF` until the phase 5 play test).
 - Spell power is `(1 + 0.01 x primary) / (1 + 0.01 x level 1 primary)`: exactly 1 at level 1, so each
   hero starts as strong as before. It scales spell damage, heals and summon health.
 - Stat cards: Strength, Agility, Intellect (+5, rounded up by rarity), Stamina (+3), Armor (+2). Every
-  other card gives 85 percent of the previous pick of it. Might, Vigor and Fortitude are gone; talents
+  other card gave 85 percent of the previous pick of it until the phase 5 play test (now every pick gives the
+  same). Might, Vigor and Fortitude are gone; talents
   and items still give their damage bonus (shown as "Damage bonus").
 - The HUD stats panel lists the five stats first (primary in gold), then attack damage, spell power and
   the rest. The lobby shows health, attack and attributes.
@@ -285,7 +286,7 @@ New:
 As built (numbers in `CFG`, under "Difficulty"):
 
 - Experience: `G.xpFor(level) = 5 + 9k + 1.4k^2` (k = level - 1), `XP_CURVE`.
-- Spell ranks: +25 percent damage and healing per rank up to rank 5, +10 percent after (`RANK_BONUS`,
+- Spell ranks (changed after play test 1, below): +25 percent damage and healing per rank up to rank 5, +10 percent after (`RANK_BONUS`,
   `RANK_STEEP`, `RANK_BONUS_LATE`); cooldowns shrink 5 percent a rank down to half (`RANK_CD_FLOOR`). A rank-up
   card adds 40 percent of its rarity bonus to the spell's power (`RANK_RARITY`); a new spell still gets all of it.
   Power had reached x3 from rank-ups alone.
@@ -314,7 +315,32 @@ Before and after, Ashenvale Normal, fresh profile (Archmage, Blademaster, Death 
 | After, geared, Northrend Normal | 28 to 43 | never for three heroes, 6:40 or later for the Death Knight |
 | After, geared, Northrend Mythic | 20 to 39 | 1:17 to 9:19 |
 
-Next: play tests in the engine, then more rounds (zone powers past Ashenvale, hero outliers such as Blizzard and
+### Play test 1 (2026-11-01, Blademaster, Ashenvale Normal)
+
+Won with no danger: every spell on autocast and never out of mana, the Mirror Images had the hero's health and
+held the enemies' attention, Bladestorm did all the damage, one Vampirism card kept the hero at full health
+against the bosses, damage numbers came and went. The player found diminishing returns on cards bad and asked
+for linear gains instead. Changed:
+
+- Mirror Image: cooldown 24 s (was 6), images have a quarter of the hero's health (`IMAGE_HEALTH`) and fade
+  after 6 s (`IMAGE_DURATION`): a way out now and then, not a wall.
+- Life steal heals at most 3 percent of maximum health a second (`LIFESTEAL_CAP`, `G.leech`); the card says so.
+  An area spell on a pack had healed without end.
+- Enemies and bosses hit 1.7 times their listed damage (`ENEMY_DMG`).
+- Mana: a mana rune drops from 1 kill in 250 (was 1 in 80) and restores 20 percent (was 30): late in a run they
+  had refilled about 300 mana every 10 s. `MANA_RATE_MIN` 6 (was 2.5): Bladestorm, whose Warcraft III cooldown is
+  180 s, had cost 3 mana a cast; now 7 at rank 1.
+- Linear gains: every pick of a stat card gives the same (`STACK_FALLOFF` is gone), every spell rank +20 percent
+  (`RANK_BONUS`), cooldowns 3 percent of the base shorter per rank down to half (`RANK_CD`, `RANK_CD_FLOOR`). To
+  fit, Ferocity gives 10 percent attack speed (was 12), Haste 5 percent (was 6), Reach 8 percent area (was 12).
+- Damage numbers: each source shows up to 4 numbers a quarter second (crits 2 more, `NUMBERS_PER_SOURCE`): an area
+  spell on a pack had used up the game's text tags.
+
+Balance report after it: with every spell on autocast the Blademaster's mana sits near 10 percent from minute 3;
+first would-be deaths 2:30 to 6:40. The report hit harder than the game last round (it said 5 to 9 minutes
+when the play test never felt threatened), so the enemies stay this strong until the next play test.
+
+Next: more play tests, then more rounds (zone powers past Ashenvale, hero outliers such as Blizzard and
 Bladestorm, Heroic and Mythic multipliers).
 
 Planned:
@@ -323,7 +349,7 @@ Targets for a fresh profile on Normal: lose the first Ashenvale runs around minu
 few talent ranks and items are in. About **30 level-ups** per 10-minute run instead of 70.
 
 - **Experience:** a steeper `G.xpFor` (about 30 levels per run).
-- **Spell ranks:** keep "no rank limit", with diminishing returns: +25 percent damage per rank up to
+- **Spell ranks:** (superseded by play test 1: linear) keep "no rank limit", with diminishing returns: +25 percent damage per rank up to
   rank 5, then +10 percent. Cooldown reduction from ranks stops at 50 percent.
 - **Enemies:** health x(1 + 2.5 x progress^1.4) and damage x(1 + 1.5 x progress) over a run, Ashenvale
   power from 0.7 to 1.0, elites more often, bosses tougher. Heroic and Mythic keep their multipliers on top.

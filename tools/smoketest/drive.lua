@@ -580,6 +580,13 @@ check(GetWidgetLife(run.hero) >= maxHp - 0.01 and run.wardReady > run.time, 'Spe
 SetWidgetLife(run.hero, maxHp * 0.35)
 UnitDamageTarget(target, run.hero, maxHp * 0.08, true, false, ATTACK_TYPE_CHAOS, DAMAGE_TYPE_NORMAL, WEAPON_TYPE_WHOKNOWS)
 check(GetWidgetLife(run.hero) > maxHp * 0.35, 'Staff of Sanctuary heals under 30 percent health')
+-- Life steal heals at most 3 percent of maximum health a second, however
+-- many enemies an area spell hits.
+SetWidgetLife(run.hero, 1)
+run.stats.lifesteal = 1
+for _ = 1, 30 do G.damage(foe(150, 0), 1000, 'attack', false) end
+local healed = GetWidgetLife(run.hero) - 1
+check(healed <= maxHp * 0.03 + 1, 'life steal is capped, healed ' .. healed .. ' of ' .. maxHp)
 G.endRun(false)
 MOCK.click('Return to Camp')
 Profile.data.gear, Profile.data.inv = savedGear, savedInv
@@ -605,6 +612,8 @@ for index, hero in ipairs(HEROES) do
         local image = next(run.images)
         check(image ~= nil, 'mirror images appear')
         local life = GetWidgetLife(image)
+        check(math.abs(BlzGetUnitMaxHP(image) - math.floor(BlzGetUnitMaxHP(run.hero) * 0.25)) <= 1,
+            'a mirror image has a quarter of the hero health')
         UnitDamageTarget(next(run.enemies), image, 10, true, false, ATTACK_TYPE_CHAOS, DAMAGE_TYPE_NORMAL, WEAPON_TYPE_WHOKNOWS)
         check(math.abs(life - GetWidgetLife(image) - 30) < 0.01, 'mirror images take triple damage, lost '
             .. (life - GetWidgetLife(image)))

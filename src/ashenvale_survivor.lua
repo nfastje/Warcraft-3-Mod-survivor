@@ -50,7 +50,6 @@ do
         ATTACK_SPEED_PER_AGILITY = 0.01,
         ARMOR_PER_AGILITY = 0.15,
         SPELL_POWER_PER_POINT = 0.01,
-        STACK_FALLOFF = 0.85,        -- each further pick of the same stat card gives 85 percent of the one before
         -- Mana (see MANA_DATA). Pool and regeneration grow with Intellect as in
         -- Warcraft III, on top of a base regeneration.
         MANA_PER_INTELLECT = 15,
@@ -58,9 +57,10 @@ do
         MANA_REGEN_PER_INTELLECT = 0.05,
         MANA_COST_SCALE = 0.18,      -- share of the Warcraft III mana spent per second of cooldown
         MANA_COST_PER_RANK = 0.12,   -- each rank above 1 costs 12 percent more
-        MANA_RATE_MIN = 2.5,         -- Warcraft III mana per second, kept within these bounds
+        MANA_RATE_MIN = 6.0,         -- Warcraft III mana per second, kept within these bounds (ultimates with long
+                                     -- Warcraft III cooldowns would cost almost nothing at their rate)
         MANA_RATE_MAX = 16.0,
-        MANA_RUNE = 0.3,             -- a mana rune restores 30 percent of the pool
+        MANA_RUNE = 0.2,             -- a mana rune restores 20 percent of the pool (1 kill in 250 drops one)
         BASE_PICKUP = 170.0,
         BASE_REROLLS = 2,
         BASE_BANISHES = 1,
@@ -71,20 +71,24 @@ do
         ENEMY_HP_GROWTH = 3.0,
         ENEMY_HP_CURVE = 1.4,
         ENEMY_DMG_GROWTH = 2.0,
+        ENEMY_DMG = 1.7,             -- every enemy and boss hits this much harder than its listed damage
+        LIFESTEAL_CAP = 0.03,        -- life steal heals at most 3 percent of maximum health a second (G.leech)
         BOSS_HP = 1.5,               -- on top of each boss's own health
         ELITE_HP = 3.0,              -- an elite has three times its kind's health
         ELITE_EVERY = 30.0,          -- seconds between elites
         ELITE_CHEST = 0.35,          -- chance an elite drops a chest (else gold)
         RANK_RARITY = 0.4,           -- share of a card's rarity bonus a rank-up adds to the spell's power
-        RANK_BONUS = 0.25,           -- spell damage and healing per rank up to RANK_STEEP
-        RANK_STEEP = 5,
-        RANK_BONUS_LATE = 0.10,      -- per rank after that
-        RANK_CD_FLOOR = 0.5,         -- ranks shorten a cooldown to half at most
+        RANK_BONUS = 0.20,           -- spell damage and healing per rank, the same for every rank
+        RANK_CD = 0.03,              -- each rank shortens the cooldown by 3 percent of the base...
+        RANK_CD_FLOOR = 0.5,         -- ...down to half
         XP_CURVE = 1.4,              -- see G.xpFor
         CAMERA_DISTANCE = 1850.0,
         DAMAGE_NUMBERS = true,
+        NUMBERS_PER_SOURCE = 4,      -- damage numbers each source shows per quarter second (crits 2 more)
         DECOY_REACH = 700.0,         -- enemies this close to a Mirror Image attack it instead of the hero
         IMAGE_DAMAGE_TAKEN = 3.0,    -- Mirror Images take triple damage (300 percent)
+        IMAGE_HEALTH = 0.25,         -- of the hero's maximum health
+        IMAGE_DURATION = 6.0,        -- seconds before an image fades
         SHOW_MINIMAP = false,
         SHOW_PORTRAIT = true,
         ENEMY_PLAYER = 11,
@@ -526,9 +530,9 @@ do
         per = 0.08, trigger = 'enemies', fade = 110, dmg = 80, radius = 200, burstFx = FX.cleave, sound = 'WindWalk',
         apply = function(s, v) s.move = s.move + 0.3; s.crit = s.crit + v.amount end,
         desc = 'When surrounded, a backstab deals {dmg} damage within {radius}, then +30\037 movement speed and +{pct}\037 critical chance for {dur} sec.'})
-    spell('mirror_image', {name = 'Mirror Image', code = 'AOmi', icon = 'BTNMirrorImage', kind = 'nova', cd = 6.0, dmg = 50,
+    spell('mirror_image', {name = 'Mirror Image', code = 'AOmi', icon = 'BTNMirrorImage', kind = 'nova', cd = 24.0, dmg = 50,
         radius = 260, fx = FX.mirrorImage, images = true,
-        desc = 'Splits into images that slash every enemy within {radius} for {dmg} damage.'})
+        desc = 'Splits into images that slash every enemy within {radius} for {dmg} damage and draw the enemies close by. Images have a quarter of your health and fade after 6 seconds.'})
     spell('endurance_aura', {name = 'Endurance Aura', code = 'AOae', icon = 'BTNCommand', kind = 'aura', per = 0.05,
         interval = 1.0, dmg = 12, radius = 240, fx = FX.cleave,
         apply = function(s, v) s.move = s.move + v.amount; s.attackSpeed = s.attackSpeed + v.amount end,
@@ -846,7 +850,7 @@ do
     ---------------------------------------------------------------------------
     -- Blessings: generic stat cards any hero can draw. They take no spell slot.
     -- The five attributes add whole points (rarity rounds them up). Every
-    -- other card gives less with each further pick (CFG.STACK_FALLOFF).
+    -- pick of a card gives the same as the first.
     -- Icons are the Warcraft III items that give the stat.
     ---------------------------------------------------------------------------
     local BLESSINGS = {
@@ -860,11 +864,11 @@ do
             desc = '+{v} Stamina', apply = function(s, x) s.sta = s.sta + x end},
         {key = 'armor', name = 'Armor', code = 'rde1', icon = 'BTNRingJadeFalcon', per = 2, flat = true, attribute = true,
             desc = '+{v} armor', apply = function(s, x) s.armor = s.armor + x end},
-        {key = 'ferocity', name = 'Ferocity', code = 'gcel', icon = 'BTNGlove', per = 0.12,
+        {key = 'ferocity', name = 'Ferocity', code = 'gcel', icon = 'BTNGlove', per = 0.10,
             desc = '+{v}\037 attack speed', apply = function(s, x) s.attackSpeed = s.attackSpeed + x end},
-        {key = 'haste', name = 'Haste', code = 'Ablo', icon = 'BTNBloodLust', per = 0.06,
+        {key = 'haste', name = 'Haste', code = 'Ablo', icon = 'BTNBloodLust', per = 0.05,
             desc = 'Spells recharge {v}\037 faster', apply = function(s, x) s.cdr = s.cdr + x end},
-        {key = 'reach', name = 'Reach', code = 'ofir', icon = 'BTNOrbOfFire', per = 0.12,
+        {key = 'reach', name = 'Reach', code = 'ofir', icon = 'BTNOrbOfFire', per = 0.08,
             desc = '+{v}\037 area of effect', apply = function(s, x) s.area = s.area + x end},
         {key = 'swiftness', name = 'Swiftness', code = 'bspd', icon = 'BTNBootsOfSpeed', per = 0.07,
             desc = '+{v}\037 movement speed', apply = function(s, x) s.move = s.move + x end},
@@ -875,7 +879,7 @@ do
         {key = 'brutality', name = 'Brutality', code = 'ratc', icon = 'BTNClawsOfAttack', per = 0.25,
             desc = '+{v}\037 critical strike damage', apply = function(s, x) s.critMult = s.critMult + x end},
         {key = 'vampirism', name = 'Vampirism', code = 'vamp', icon = 'BTNVampiricPotion', per = 0.02,
-            desc = 'Heal for {v}\037 of damage dealt', apply = function(s, x) s.lifesteal = s.lifesteal + x end},
+            desc = 'Heal for {v}\037 of damage dealt (up to 3\037 of your health a second)', apply = function(s, x) s.lifesteal = s.lifesteal + x end},
         {key = 'magnetism', name = 'Magnetism', code = 'mcou', icon = 'BTNMedalionOfCourage', per = 0.30,
             desc = '+{v}\037 pickup range', apply = function(s, x) s.pickup = s.pickup + x end},
         {key = 'wisdom', name = 'Wisdom', code = 'tkno', icon = 'BTNTome', per = 0.10,
@@ -2604,10 +2608,8 @@ do
         local r = rank - 1
         -- Spell power is nil while G.recomputeStats is still adding bonuses.
         local spellPower = s.spellPower or 1
-        -- Ranks never stop, with diminishing returns: RANK_BONUS a rank up to
-        -- RANK_STEEP, RANK_BONUS_LATE after.
-        local steep = math.min(r, CFG.RANK_STEEP - 1)
-        local rankMult = 1 + CFG.RANK_BONUS * steep + CFG.RANK_BONUS_LATE * (r - steep)
+        -- Ranks never stop, and each one adds the same RANK_BONUS.
+        local rankMult = 1 + CFG.RANK_BONUS * r
         local dmgMult = rankMult * power * (1 + s.damage) * spellPower
         local v = {rank = rank}
         v.dmg = (def.dmg or 0) * dmgMult
@@ -2620,8 +2622,8 @@ do
         if def.kind == 'bolt' or def.kind == 'line' then
             v.count = v.count + s.multishot
         end
-        -- 5 percent faster per rank, compounding, down to half the cooldown.
-        v.cd = (def.cd or 1) * math.max(CFG.RANK_CD_FLOOR, 0.95 ^ r) * (1 - math.min(0.6, s.cdr))
+        -- RANK_CD faster per rank, down to half the cooldown.
+        v.cd = (def.cd or 1) * math.max(CFG.RANK_CD_FLOOR, 1 - CFG.RANK_CD * r) * (1 - math.min(0.6, s.cdr))
         -- Whole mana points (MANA_DATA), a little more with every rank, less
         -- with Spell Mastery.
         v.mana = def.mana and math.max(1, math.floor(def.mana * (1 + CFG.MANA_COST_PER_RANK * r)
@@ -2673,13 +2675,13 @@ do
     end
 
     -- What one more pick of a stat card adds (current: the run's picks of it
-    -- so far, or nil): attributes in whole points, every other card a little
-    -- less for each pick already taken.
+    -- so far, or nil, unused: every pick gives the same): attributes in whole
+    -- points.
     function G.blessingGain(b, current, bonus)
         if b.attribute then
             return math.floor(b.per * (1 + bonus) + 0.5)
         end
-        return b.per * (1 + bonus) * CFG.STACK_FALLOFF ^ (current and current.rank or 0)
+        return b.per * (1 + bonus)
     end
 
     function G.describeBlessing(b, x)
@@ -3006,6 +3008,17 @@ do
             return
         end
         SetWidgetLife(R.hero, math.min(BlzGetUnitMaxHP(R.hero), life + amount))
+    end
+
+    -- Life steal heals from every hit, so an area spell on a pack would heal
+    -- without end: it heals up to LIFESTEAL_CAP of the hero's maximum health
+    -- a second (a budget that refills, one second's worth at most).
+    function G.leech(amount)
+        local cap = CFG.LIFESTEAL_CAP * BlzGetUnitMaxHP(R.hero)
+        local budget = math.min(cap, (R.leechBudget or cap) + (R.time - (R.leechAt or R.time)) * cap)
+        local heal = math.min(amount, budget)
+        R.leechBudget, R.leechAt = budget - heal, R.time
+        G.heal(heal)
     end
 
     function G.addGold(amount)
@@ -3376,10 +3389,19 @@ do
             R.meter[key] = (R.meter[key] or 0) + dealt
             R.damageDone = R.damageDone + dealt
             if R.stats.lifesteal > 0 then
-                G.heal(dealt * R.stats.lifesteal)
+                G.leech(dealt * R.stats.lifesteal)
             end
             -- Every hit shows its number (damage over time ticks do not).
-            if CFG.DAMAGE_NUMBERS and not R.dmgTick and amount >= 1 then
+            -- The game shows 100 text tags at once: an area spell hitting a
+            -- pack would take them all and the numbers would flicker. Each
+            -- source shows a few numbers every quarter second, crits first.
+            if R.time >= (R.numbersAt or 0) then
+                R.numbersAt, R.numbers = R.time + 0.25, {}
+            end
+            local shown = R.numbers[key] or 0
+            if CFG.DAMAGE_NUMBERS and not R.dmgTick and amount >= 1
+                and shown < (R.dmgCrit and CFG.NUMBERS_PER_SOURCE + 2 or CFG.NUMBERS_PER_SOURCE) then
+                R.numbers[key] = shown + 1
                 local x, y = GetUnitX(target), GetUnitY(target)
                 if R.dmgCrit then
                     G.floatText(x, y, U.num(amount) .. '!', 12, 255, 150, 40)
@@ -3556,11 +3578,11 @@ do
         local hp, dmg
         if opts.boss then
             hp = opts.boss.hp * CFG.BOSS_HP * zone.power * diff.hp
-            dmg = opts.boss.dmg * zone.power ^ 0.7 * diff.dmg
+            dmg = opts.boss.dmg * CFG.ENEMY_DMG * zone.power ^ 0.7 * diff.dmg
         else
             hp = def.hp * 1.12 ^ ((def.index or 1) - 1) * (1 + CFG.ENEMY_HP_GROWTH * progress ^ CFG.ENEMY_HP_CURVE)
                 * zone.power * diff.hp * (opts.elite and CFG.ELITE_HP or 1)
-            dmg = def.dmg * (1 + CFG.ENEMY_DMG_GROWTH * progress) * zone.power ^ 0.7 * diff.dmg
+            dmg = def.dmg * CFG.ENEMY_DMG * (1 + CFG.ENEMY_DMG_GROWTH * progress) * zone.power ^ 0.7 * diff.dmg
         end
         local endlessHp, endlessDmg = G.endlessScale()
         hp, dmg = hp * endlessHp, dmg * endlessDmg
@@ -3957,7 +3979,7 @@ do
             G.dropPickup('magnet', x, y, 0)
         elseif roll < 0.014 then
             G.dropPickup('heal', x, y, 0)
-        elseif roll < 0.026 then
+        elseif roll < 0.018 then
             G.dropPickup('mana', x, y, 0)
         elseif roll < 0.08 then
             G.dropPickup('gold', x, y, GetRandomInt(1, 3))
@@ -4500,7 +4522,8 @@ do
             alive = alive + 1
         end
         local id = GetUnitTypeId(R.hero)
-        local hp = BlzGetUnitMaxHP(R.hero)
+        -- A way out now and then, not a wall: weak and short-lived.
+        local hp = BlzGetUnitMaxHP(R.hero) * CFG.IMAGE_HEALTH
         local s = R.stats
         local damage = s.attackDamage * 0.4
         local spin = GetRandomReal(0, TWO_PI)
@@ -4517,6 +4540,7 @@ do
                 BlzSetUnitMaxHP(u, math.max(1, math.floor(hp)))
                 SetWidgetLife(u, hp)
                 BlzSetUnitBaseDamage(u, math.max(1, math.floor(damage)), 0)
+                UnitApplyTimedLife(u, FourCC('BTLF'), CFG.IMAGE_DURATION)
                 if R.paused then
                     PauseUnit(u, true)
                 end
