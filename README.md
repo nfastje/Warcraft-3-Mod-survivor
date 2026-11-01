@@ -153,7 +153,7 @@ The file must never contain a percent sign: the editor crashes on save.
 | `src/engine_boot.lua` | Entry point for the standalone engine (menu map, zone arenas) |
 | `src/art/` | Lobby title art |
 | `map/` | The Reforged map |
-| `tools/smoketest/` | Runs the script against mocked natives: `python tools/smoketest/run.py` (needs `pip install lupa`) |
+| `tools/smoketest/` | Runs the script against mocked natives: `python tools/smoketest/run.py` (needs `pip install lupa`); `--balance` prints a balance report |
 | `tools/engine_tests/` | Test scripts for the standalone engine |
 | `tools/release/` | Builds the Windows download |
 | `docs/screenshots/` | The pictures above |

@@ -56,8 +56,8 @@ do
         MANA_PER_INTELLECT = 15,
         MANA_REGEN_BASE = 1.0,       -- mana per second
         MANA_REGEN_PER_INTELLECT = 0.05,
-        MANA_COST_SCALE = 0.12,      -- share of the Warcraft III mana spent per second of cooldown
-        MANA_COST_PER_RANK = 0.06,   -- each rank above 1 costs 6 percent more
+        MANA_COST_SCALE = 0.18,      -- share of the Warcraft III mana spent per second of cooldown
+        MANA_COST_PER_RANK = 0.12,   -- each rank above 1 costs 12 percent more
         MANA_RATE_MIN = 2.5,         -- Warcraft III mana per second, kept within these bounds
         MANA_RATE_MAX = 16.0,
         MANA_RUNE = 0.3,             -- a mana rune restores 30 percent of the pool
@@ -65,6 +65,22 @@ do
         BASE_REROLLS = 2,
         BASE_BANISHES = 1,
         XP_RATE = 2,                 -- experience per gem point, as in the original
+        -- Difficulty (balance pass, phase 5; tools/smoketest/balance.lua reports
+        -- a run minute by minute). Over a run enemy health grows
+        -- x(1 + ENEMY_HP_GROWTH x progress^ENEMY_HP_CURVE), damage x(1 + ENEMY_DMG_GROWTH x progress).
+        ENEMY_HP_GROWTH = 3.0,
+        ENEMY_HP_CURVE = 1.4,
+        ENEMY_DMG_GROWTH = 2.0,
+        BOSS_HP = 1.5,               -- on top of each boss's own health
+        ELITE_HP = 3.0,              -- an elite has three times its kind's health
+        ELITE_EVERY = 30.0,          -- seconds between elites
+        ELITE_CHEST = 0.35,          -- chance an elite drops a chest (else gold)
+        RANK_RARITY = 0.4,           -- share of a card's rarity bonus a rank-up adds to the spell's power
+        RANK_BONUS = 0.25,           -- spell damage and healing per rank up to RANK_STEEP
+        RANK_STEEP = 5,
+        RANK_BONUS_LATE = 0.10,      -- per rank after that
+        RANK_CD_FLOOR = 0.5,         -- ranks shorten a cooldown to half at most
+        XP_CURVE = 1.4,              -- see G.xpFor
         CAMERA_DISTANCE = 1850.0,
         DAMAGE_NUMBERS = true,
         DECOY_REACH = 700.0,         -- enemies this close to a Mirror Image attack it instead of the hero
@@ -883,7 +899,7 @@ do
     -- of day. Winning a zone unlocks the next. Every boss drops gear.
     ---------------------------------------------------------------------------
     local ZONES = {
-        {name = 'Ashenvale', subtitle = 'The Long Night', tier = 1, power = 0.7, density = 0.8,
+        {name = 'Ashenvale', subtitle = 'The Long Night', tier = 1, power = 1.0, density = 0.8,
             music = {'NightElf1', 'NightElf2', 'NightElf3', 'NightElfX1'},
             art = 'UI\\Glues\\Loading\\Backgrounds\\Campaigns\\Ashenvale-TopLeft.blp',
             thumb = 'Scripts\\Survivor\\zone_ashenvale.tga',
@@ -2588,20 +2604,24 @@ do
         local r = rank - 1
         -- Spell power is nil while G.recomputeStats is still adding bonuses.
         local spellPower = s.spellPower or 1
-        local dmgMult = (1 + 0.35 * r) * power * (1 + s.damage) * spellPower
+        -- Ranks never stop, with diminishing returns: RANK_BONUS a rank up to
+        -- RANK_STEEP, RANK_BONUS_LATE after.
+        local steep = math.min(r, CFG.RANK_STEEP - 1)
+        local rankMult = 1 + CFG.RANK_BONUS * steep + CFG.RANK_BONUS_LATE * (r - steep)
+        local dmgMult = rankMult * power * (1 + s.damage) * spellPower
         local v = {rank = rank}
         v.dmg = (def.dmg or 0) * dmgMult
         v.dot = (def.dot or 0) * dmgMult
         v.impact = (def.impactDamage or 0) * dmgMult
-        v.heal = (def.heal or 0) * (1 + 0.3 * r) * power * spellPower
+        v.heal = (def.heal or 0) * rankMult * power * spellPower
         v.radius = (def.radius or 0) * (1 + 0.06 * r) * (1 + s.area)
         v.range = def.range or 900
         v.count = (def.count or 1) + math.floor(r / (def.countEvery or 99))
         if def.kind == 'bolt' or def.kind == 'line' then
             v.count = v.count + s.multishot
         end
-        -- 5 percent faster per rank, compounding: never reaches zero.
-        v.cd = (def.cd or 1) * 0.95 ^ r * (1 - math.min(0.6, s.cdr))
+        -- 5 percent faster per rank, compounding, down to half the cooldown.
+        v.cd = (def.cd or 1) * math.max(CFG.RANK_CD_FLOOR, 0.95 ^ r) * (1 - math.min(0.6, s.cdr))
         -- Whole mana points (MANA_DATA), a little more with every rank, less
         -- with Spell Mastery.
         v.mana = def.mana and math.max(1, math.floor(def.mana * (1 + CFG.MANA_COST_PER_RANK * r)
@@ -3535,11 +3555,12 @@ do
         local zone, diff = R.zone, R.diff
         local hp, dmg
         if opts.boss then
-            hp = opts.boss.hp * zone.power * diff.hp
+            hp = opts.boss.hp * CFG.BOSS_HP * zone.power * diff.hp
             dmg = opts.boss.dmg * zone.power ^ 0.7 * diff.dmg
         else
-            hp = def.hp * 1.12 ^ ((def.index or 1) - 1) * (1 + progress * 0.75) * zone.power * diff.hp
-            dmg = def.dmg * (1 + progress * 0.9) * zone.power ^ 0.7 * diff.dmg
+            hp = def.hp * 1.12 ^ ((def.index or 1) - 1) * (1 + CFG.ENEMY_HP_GROWTH * progress ^ CFG.ENEMY_HP_CURVE)
+                * zone.power * diff.hp * (opts.elite and CFG.ELITE_HP or 1)
+            dmg = def.dmg * (1 + CFG.ENEMY_DMG_GROWTH * progress) * zone.power ^ 0.7 * diff.dmg
         end
         local endlessHp, endlessDmg = G.endlessScale()
         hp, dmg = hp * endlessHp, dmg * endlessDmg
@@ -3632,7 +3653,7 @@ do
         end
 
         if R.time >= R.nextElite then
-            R.nextElite = R.nextElite + (R.endless and CFG.ENDLESS_ELITE_EVERY or 45)
+            R.nextElite = R.nextElite + (R.endless and CFG.ENDLESS_ELITE_EVERY or CFG.ELITE_EVERY)
             G.spawnElite()
         end
 
@@ -3942,7 +3963,12 @@ do
             G.dropPickup('gold', x, y, GetRandomInt(1, 3))
         end
         if info.elite then
-            G.dropPickup('chest', x, y, 0)
+            -- Some elites carry a chest (a card hand); the others a pile of gold.
+            if GetRandomReal(0, 1) < CFG.ELITE_CHEST then
+                G.dropPickup('chest', x, y, 0)
+            else
+                G.dropPickup('gold', x, y, GetRandomInt(8, 15))
+            end
         end
         if info.boss then
             G.onBossDeath(u, info, x, y)
@@ -4215,13 +4241,11 @@ do
     end
 
     -- The original's Vampire Survivors curve: cheap early, steeper after 20 and 40.
+    -- Experience from one level to the next: grows faster with every level
+    -- (about 30 levels in a 10-minute run).
     function G.xpFor(level)
-        if level < 20 then
-            return 5 + (level - 1) * 10
-        elseif level < 40 then
-            return 195 + (level - 20) * 13
-        end
-        return 455 + (level - 40) * 16
+        local k = level - 1
+        return math.floor(5 + 9 * k + CFG.XP_CURVE * k * k)
     end
 
     function G.gainXp(amount)
@@ -6840,7 +6864,7 @@ do
             local inst = R.spellByKey[c.key]
             if inst then
                 inst.rank = inst.rank + 1
-                inst.power = inst.power + bonus
+                inst.power = inst.power + bonus * CFG.RANK_RARITY
             else
                 G.learnSpell(c.key, 1 + bonus)
             end

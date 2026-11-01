@@ -280,7 +280,44 @@ New:
 - Effects hook into existing points in the script: attack hit, kill, damage taken, low health, cast.
 - Items stay the same entries (`z<zone>b<boss>`), so loot and the upgrade track work unchanged.
 
-## 5. Difficulty and pacing (phase 5, then ongoing)
+## 5. Difficulty and pacing (phase 5, first round done 2026-11-01)
+
+As built (numbers in `CFG`, under "Difficulty"):
+
+- Experience: `G.xpFor(level) = 5 + 9k + 1.4k^2` (k = level - 1), `XP_CURVE`.
+- Spell ranks: +25 percent damage and healing per rank up to rank 5, +10 percent after (`RANK_BONUS`,
+  `RANK_STEEP`, `RANK_BONUS_LATE`); cooldowns shrink 5 percent a rank down to half (`RANK_CD_FLOOR`). A rank-up
+  card adds 40 percent of its rarity bonus to the spell's power (`RANK_RARITY`); a new spell still gets all of it.
+  Power had reached x3 from rank-ups alone.
+- Enemies: health x(1 + 3.0 x progress^1.4), damage x(1 + 2.0 x progress) over a run (`ENEMY_HP_GROWTH`,
+  `ENEMY_HP_CURVE`, `ENEMY_DMG_GROWTH`); bosses x1.5 health (`BOSS_HP`); an elite every 30 s (was 45) with three
+  times the health (`ELITE_HP`), and only 35 percent of elites drop a chest, the others 8 to 15 gold
+  (`ELITE_CHEST`): a run had dealt about 60 card hands. Ashenvale power 1.0 (was 0.7). Other zones keep their power
+  for now; the growth curve applies everywhere.
+- Mana: costs x1.5 (`MANA_COST_SCALE` 0.18) and +12 percent a rank (was 6): late in a run the Archmage's pool
+  now runs down (Blizzard at rank 14 costs 40 every 3.6 s).
+- Balance report: `python tools/smoketest/run.py --balance [zone] [difficulty] [hero ids] [geared]` plays each
+  hero three times on a fresh profile (or `geared`: every talent at its last rank and six late items) and prints
+  a minute-by-minute table for the first run, then a summary (first death, final level). The mock has no unit
+  AI, so the report plays the enemies (they walk at their speed, melee hits every 1.5 s after armor) and the
+  hero (kites from packs, sweeps gems when few enemies are near, ranks its top damage spell). A hit that would
+  kill counts a death and the run goes on. Summons and ranged enemies do not fight in it: heroes that lean on
+  them (Death Knight, Archmage's Water Elemental) read weaker than they are.
+
+Before and after, Ashenvale Normal, fresh profile (Archmage, Blademaster, Death Knight, Demon Hunter):
+
+| | Level at 10:00 | First death (would-be) |
+| --- | --- | --- |
+| Before | 63 to 73 | never |
+| After | 19 to 37, about 30 | 3:05 to never, mostly 4 to 7 minutes |
+| After, geared (Ashenvale) | 30 to 42 | never |
+| After, geared, Northrend Normal | 28 to 43 | never for three heroes, 6:40 or later for the Death Knight |
+| After, geared, Northrend Mythic | 20 to 39 | 1:17 to 9:19 |
+
+Next: play tests in the engine, then more rounds (zone powers past Ashenvale, hero outliers such as Blizzard and
+Bladestorm, Heroic and Mythic multipliers).
+
+Planned:
 
 Targets for a fresh profile on Normal: lose the first Ashenvale runs around minutes 5 to 8; win once a
 few talent ranks and items are in. About **30 level-ups** per 10-minute run instead of 70.

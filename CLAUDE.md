@@ -264,6 +264,9 @@ SDK), host-authoritative, agreed balance, resource estimates. The user is still 
   run. Effect keys double as damage meter sources (`SOURCE_NAMES`), so they must not clash with spell keys. The
   engine wraps text anywhere, even inside "+3.4%": keep stat lists one per line, never one wrapped paragraph.
   Test aid: `+set survivor_gear "ofro desc clfm"`.
+- Phase 5 (2026-11-01): difficulty. Tuning numbers in `CFG` ("Difficulty"); check every change with the balance
+  report, `python tools/smoketest/run.py --balance [zone] [difficulty] [hero ids] [geared]` (`balance.lua`: plays
+  the enemies and the hero itself, three seeds a hero; see `docs/balance-plan.md` for what it can and cannot see).
 - Loading screens never reach `+screenshot`; capture only the game window with `PrintWindow`.
 - Test aids: `+set survivor_tab codex` opens a lobby tab; `+set survivor_menu keys` opens the options
   at a page (`main`, `audio`, `keys`, `interface`); `+set survivor_run "5 1 1 2"` (hero, zone,
