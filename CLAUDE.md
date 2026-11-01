@@ -571,8 +571,11 @@ The same Lua file as the Reforged map, unchanged. Engine-side pieces (all on bra
   returns before reading `SND_POS`, so the position's bytes were read as message codes (`Unknown message N`, rest of
   the packet dropped). A low X byte of 19 (`svc_disconnect`) disconnected: about one Blizzard cast in 256, all six
   waves share the spot. `G.sound` now skips `SetSoundPosition` in the engine (an unpositioned owner sound writes
-  neither field). Engine fix still open: read `SND_POS` before rejecting, and send no `SND_ENT` for entity 0.
+  neither field), which keeps the script safe on the author's engine builds too.
   Repro: a script `StartSound` positioned at x 275 logs `CL_Disconnect: Server disconnected.`
+  **Engine fixed the same day:** `CL_ParseSound` reads every announced field before rejecting (a bad entity with a
+  position plays there), and `SV_StartSoundPolicy` sends no `SND_ENT` for entity 0. Test:
+  `client_sound.bad_entity_still_reads_position` in `client/cl_parse.c`.
 - Builds made from a non-English 1.29 install show its text. `python tools/make_english_text.py "<Reforged folder>"
   "<engine Data folder>" [locale]` writes `War3zText.mpq` (the string files from Reforged's CASC storage,
   `tools/reforged_casc.py`); it sorts after `War3xLocal.mpq`, so the engine reads its strings instead. Voices stay

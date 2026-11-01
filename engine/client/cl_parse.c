@@ -1098,13 +1098,19 @@ static void CL_ParseSound(sizeBuf_t *msg) {
         uint16_t packed = (uint16_t)MSG_ReadShort(msg);
         entity = packed >> 3;
         channel |= packed & 7;
-        if (entity <= 0 || entity >= MAX_CLIENT_ENTITIES) {
-            fprintf(stderr, "CL_ParseSound: bad entity=%d sound=%d\n", entity, sound_index);
-            return;
-        }
-        origin = cl.ents[entity].current.origin;
     }
     if (flags & SND_POS) MSG_ReadPos(msg, &origin);
+    /* Every field the flags announce is read before anything is rejected: an
+     * early return left the position to be parsed as message codes, and one
+     * equal to svc_disconnect dropped the game. A bad entity with a position
+     * still plays there. */
+    if ((flags & SND_ENT) && (entity <= 0 || entity >= MAX_CLIENT_ENTITIES)) {
+        fprintf(stderr, "CL_ParseSound: bad entity=%d sound=%d\n", entity, sound_index);
+        if (!(flags & SND_POS)) return;
+        flags &= ~SND_ENT;
+    } else if ((flags & SND_ENT) && !(flags & SND_POS)) {
+        origin = cl.ents[entity].current.origin;
+    }
     if (sound_index <= 0 || sound_index >= MAX_SOUNDS) {
         fprintf(stderr, "CL_ParseSound: bad sound=%d flags=0x%x\n", sound_index, (unsigned)flags);
         return;
@@ -1181,6 +1187,51 @@ TEST(client_sound, packed_entity_above_4095_reaches_mixer) {
     T_EQ(s.channels[0].policy.max_channel, 2);
     T_EQ(s.channels[0].policy.max_total, 24);
     T_EQ(s.channels[0].policy.max_duplicates, 4);
+    memcpy(cl.configstrings[CS_SOUNDS + 1], path, sizeof(path));
+    s = *saved; free(saved);
+}
+
+/* A source entity the client cannot use (0 is never a client entity) must not
+ * leave the rest of the sound unread: its position was parsed as message codes,
+ * and one equal to svc_disconnect dropped the game to the main menu. */
+TEST(client_sound, bad_entity_still_reads_position) {
+    sState_t *saved = malloc(sizeof(s));
+    sfxcache_t sample = { .length = 1, .loopstart = -1, .data = { 1000 } };
+    PATHSTR path;
+    uint8_t data[32];
+    sizeBuf_t msg;
+
+    T_NOT_NULL(saved);
+    if (!saved) return;
+    *saved = s;
+    memcpy(path, cl.configstrings[CS_SOUNDS + 1], sizeof(path));
+    memset(&s, 0, sizeof(s));
+    s.initialized = true; s.num_sfx = 1;
+    strlcpy(s.known_sfx[0].path, "packet-test.wav", sizeof(s.known_sfx[0].path));
+    s.known_sfx[0].cache = &sample;
+    strlcpy(cl.configstrings[CS_SOUNDS + 1], "packet-test.wav", sizeof(path));
+    /* x 275: its low byte is 19, the svc_disconnect code. */
+    SZ_Init(&msg, data, sizeof(data));
+    MSG_WriteByte(&msg, SND_ENT | SND_POS);
+    MSG_WriteShort(&msg, 1);
+    MSG_WriteShort(&msg, CHAN_WEAPON);
+    MSG_WritePos(&msg, &(vec3_t){ 275, 0, 50 });
+    MSG_WriteByte(&msg, svc_nop);
+    CL_ParseSound(&msg);
+    T_EQ(msg.readcount, msg.cursize - 1);
+    T_EQ(MSG_ReadByte(&msg), svc_nop);
+    T_ASSERT(s.channels[0].active);
+    T_FEQ(s.channels[0].origin.x, 275, 0.001f);
+    /* Without a position the sound has no source: dropped, still in sync. */
+    memset(s.channels, 0, sizeof(s.channels));
+    SZ_Init(&msg, data, sizeof(data));
+    MSG_WriteByte(&msg, SND_ENT);
+    MSG_WriteShort(&msg, 1);
+    MSG_WriteShort(&msg, CHAN_WEAPON);
+    MSG_WriteByte(&msg, svc_nop);
+    CL_ParseSound(&msg);
+    T_EQ(msg.readcount, msg.cursize - 1);
+    T_ASSERT(!s.channels[0].active);
     memcpy(cl.configstrings[CS_SOUNDS + 1], path, sizeof(path));
     s = *saved; free(saved);
 }

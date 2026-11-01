@@ -116,7 +116,10 @@ void SV_StartSoundPolicy(vec3_t const *origin, edict_t *ent, int channel, int so
     }
     if (ent) {
         ent_num = NUM_FOR_EDICT(ent);
-        if (!(owner_only && !origin)) flags |= SND_ENT;
+        /* Entity 0 is no client entity (CL_ParseSound rejects it). A script
+         * sound addressed to player 0's edict as its recipient carries only
+         * its position. */
+        if (ent_num > 0 && !(owner_only && !origin)) flags |= SND_ENT;
         ent_origin = ent->s.origin;
         if (!pos) pos = &ent_origin;
     }
