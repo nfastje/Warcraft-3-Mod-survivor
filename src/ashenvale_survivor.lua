@@ -2166,6 +2166,11 @@ do
     -- point. Most spell effect models carry their own sound; this is for the
     -- spells whose art is silent (def.sound on cast, def.waveSound per wave).
     -- The engine replays one handle per label; Reforged makes one per play.
+    -- The engine plays it without a position: there a positioned script sound
+    -- goes out tagged with the player's entity 0, which the client rejects
+    -- halfway through the message. The rest of the packet was then misread,
+    -- and a stray byte read as a disconnect dropped the game to the main menu
+    -- (Blizzard's waves sent one every 0.45 s).
     G.sounds = {}
     function G.sound(label, x, y)
         local snd = G.sounds[label]
@@ -2178,7 +2183,9 @@ do
                 G.sounds[label] = snd
             end
         end
-        SetSoundPosition(snd, x, y, 50)
+        if not Engine.active() then
+            SetSoundPosition(snd, x, y, 50)
+        end
         StartSound(snd)
         if not Engine.active() then
             KillSoundWhenDone(snd)
