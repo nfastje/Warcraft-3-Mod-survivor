@@ -81,6 +81,19 @@ The download will be a small `WarcraftSurvivors.exe` (about 4 MB) on the Release
 unpacks the game and asks once where Warcraft III 1.29 is installed. Progress is saved in
 `%APPDATA%\warcraft-3\CustomMapData\WarcraftSurvivors\`.
 
+#### Game text in your language
+
+The downloads carry the text of the Warcraft III install they were built from, so unit names,
+tooltips and menus can come out in French. If you have Warcraft III Reforged, this copies its
+text (English by default) into the game's `Data` folder as `War3zText.mpq`; delete that file to
+go back:
+
+```sh
+python tools/make_english_text.py "C:\Program Files (x86)\Warcraft III" "<game folder>\Data"
+```
+
+Add a Reforged locale (`dede`, `eses`, `frfr`, `itit`...) as a third argument for another language.
+
 #### Build from source
 
 1. Install [MSYS2](https://www.msys2.org/). In the **UCRT64** shell, install the toolchain:

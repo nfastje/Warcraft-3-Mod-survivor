@@ -518,6 +518,18 @@ The same Lua file as the Reforged map, unchanged. Engine-side pieces (all on bra
   engine's Reforged declarations (`api/api_reforged.h`). `TriggerRegisterPlayerUnitEvent` crashed on
   a null event before a guard was added.
 - Melee map strings show raw keys (`CRIPPLE_TIMER_HUMAN`) with the French locale MPQs.
+- **Fixed 2026-11-01 (script workaround), positioned script sounds dropped the game to the main menu:**
+  the Lua host runs every call as the local player (`g_lua.c`), so `StartSound` takes its owner-only path and
+  `SV_StartSoundPolicy` tags the packet `SND_ENT` with the player's entity 0. `CL_ParseSound` rejects entity 0 and
+  returns before reading `SND_POS`, so the position's bytes were read as message codes (`Unknown message N`, rest of
+  the packet dropped). A low X byte of 19 (`svc_disconnect`) disconnected: about one Blizzard cast in 256, all six
+  waves share the spot. `G.sound` now skips `SetSoundPosition` in the engine (an unpositioned owner sound writes
+  neither field). Engine fix still open: read `SND_POS` before rejecting, and send no `SND_ENT` for entity 0.
+  Repro: a script `StartSound` positioned at x 275 logs `CL_Disconnect: Server disconnected.`
+- Builds made from a non-English 1.29 install show its text. `python tools/make_english_text.py "<Reforged folder>"
+  "<engine Data folder>" [locale]` writes `War3zText.mpq` (the string files from Reforged's CASC storage,
+  `tools/reforged_casc.py`); it sorts after `War3xLocal.mpq`, so the engine reads its strings instead. Voices stay
+  (Reforged's are .ogg).
 
 ## Mistakes log
 
