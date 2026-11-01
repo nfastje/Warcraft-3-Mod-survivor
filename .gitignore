@@ -10,10 +10,10 @@
 # locally with tools/engine_tests/test_zone_shot.lua (see CLAUDE.md).
 src/art/zone_*.tga
 
-# --- The engine is its own repository --------------------------------------
-# engine/ is a fork of corepunch/open-realm (branch survivor), published as
-# a separate GitHub repository. Clone it into engine/ (see README.md).
-/engine/
+# --- The engine -------------------------------------------------------------
+# engine/ is the OpenRealm fork (Willios/open-realm-williosfork, branch
+# survivor), added to this repository as a squashed git subtree. Its own
+# .gitignore keeps the build output (build/, build-windows*/, dist/) out.
 
 # --- Local and generated files ---------------------------------------------
 map/*.w3mTemp/

@@ -101,11 +101,10 @@ Add a Reforged locale (`dede`, `eses`, `frfr`, `itit`...) as a third argument fo
    pacman -S make diffutils mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-SDL2 \
              mingw-w64-ucrt-x86_64-zlib mingw-w64-ucrt-x86_64-libepoxy
    ```
-2. Clone this repository, and the engine fork into `engine/`:
+2. Clone this repository. The engine comes with it, in `engine/`:
    ```sh
-   git clone https://github.com/Willios/Warcraft-3-Mod-survivor
+   git clone https://github.com/nfastje/Warcraft-3-Mod-survivor
    cd Warcraft-3-Mod-survivor
-   git clone -b survivor https://github.com/Willios/open-realm-williosfork engine
    ```
 3. Build the engine from `engine/`:
    ```powershell
@@ -150,7 +149,7 @@ The file must never contain a percent sign: the editor crashes on save.
 | `tools/engine_tests/` | Test scripts for the standalone engine |
 | `tools/release/` | Builds the Windows download |
 | `docs/screenshots/` | The pictures above |
-| `engine/` | Not in this repository: the [OpenRealm fork](https://github.com/Willios/open-realm-williosfork/tree/survivor) is cloned here |
+| `engine/` | The engine: the [OpenRealm fork](https://github.com/Willios/open-realm-williosfork/tree/survivor), included as a git subtree |
 
 ## How it works
 

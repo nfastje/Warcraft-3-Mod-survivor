@@ -217,17 +217,21 @@ SDK), host-authoritative, agreed balance, resource estimates. The user is still 
 
 ## GitHub (open source, since 2026-10-30)
 
-- The user commits and pushes with GitHub Desktop; Claude only prepares files and checks them.
-- This folder is one repository (MIT, Willios): `github.com/Willios/Warcraft-3-Mod-survivor` (private
-  until the user reviews it). `engine/` is **not** in it: it is its own repository, the open-realm
-  fork on branch `survivor`, published as `github.com/Willios/open-realm-williosfork`.
+- This copy is nfastje's fork, `github.com/nfastje/Warcraft-3-Mod-survivor` (MIT, from
+  `Willios/Warcraft-3-Mod-survivor`, remote `upstream`). Claude commits and pushes here when asked.
+  Take the author's game updates with `git fetch upstream` and `git merge upstream/main`.
+- Since 2026-11-01 `engine/` is in this repository: the author's open-realm fork
+  (`github.com/Willios/open-realm-williosfork`, branch `survivor`) added as a squashed git subtree.
+  Engine changes are committed here like any other file. Take the author's engine updates with
+  `git subtree pull --prefix=engine https://github.com/Willios/open-realm-williosfork.git survivor --squash`
+  (from the repository root, clean working tree), then rebuild.
 - Bundling Blizzard data (as the Azeroth Survivors website download does with WoW MPQs) is the
   user's own risk decision; it never goes into either GitHub repository (DMCA takedowns hit the repo).
 - **Never commit `release/`**: the portable build bundles the user's Warcraft III install
   (`War3.mpq`...). No `*.mpq`, no extracted Blizzard files, no zone thumbnails (screenshots of
   Blizzard maps). Tester builds go to GitHub Releases (the 4 MB SFX has no Blizzard data).
-- `engine/dist/` is build output and ignored in the engine repository; anything hand-written that
-  lives only there must move into the main repository.
+- `engine/dist/` is build output and ignored (`engine/.gitignore`); anything hand-written that
+  lives only there must move into a tracked folder.
 - Tests load and may save the real profile (`%APPDATA%\warcraft-3\CustomMapData\WarcraftSurvivors\profile.pld`):
   back it up first and compare after.
 - Loading screens never reach `+screenshot`; capture only the game window with `PrintWindow`.
