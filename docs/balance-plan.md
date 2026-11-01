@@ -157,8 +157,9 @@ As built, following the tables below:
   the others carry `unlock` (an achievement key) and show "Opens with ..." and a Locked button until it is
   earned. Clarity is new (+0.3 mana per second per rank). Might and Vitality are gone: a save that bought
   them gets the gold back on load. Haste moved to the Bloodlust icon (the Sobi Mask is Clarity's now).
-- Heroes carry `unlock` too, set after the achievements: new "<Hero> Joins" achievements (survive 5:00 with
-  the faction's first hero, a boss with its second; 10 and 15 points), the faction's "For the ...!" win for
+- Heroes carry `unlock` too, set after the achievements: new "<Hero> Joins" achievements (a boss slain with
+  the faction's first hero, 5:00 survived with its second; 10 and 15 points; swapped the same day, since the
+  bosses come at 2:00 and 4:00, surviving 5:00 is the harder step), the faction's "For the ...!" win for
   the fourth, the zone achievements in `ZONE_ORDER` for the Tavern. The profile keeps `heroTime` (longest run
   per hero) and `heroBosses`. Locked heroes are dim in the grid; selecting one shows LOCKED HERO and its
   requirement, and neither the button nor Space starts a run. Random Hero picks among open heroes.
@@ -191,8 +192,8 @@ Planned:
 - Start with four heroes, one per main faction, covering all three primary attributes:
   **Archmage** (Int), **Blademaster** (Agi), **Death Knight** (Str), **Demon Hunter** (Agi).
 - The rest of each faction unlocks in a chain, with new hero achievements (each also gives points):
-  1. **Survive 5:00** with the faction's first hero: unlocks the second.
-  2. **Defeat a boss** with the second: unlocks the third.
+  1. **Defeat a boss** with the faction's first hero: unlocks the second.
+  2. **Survive 5:00** with the second: unlocks the third.
   3. **Win a run** with any hero of the faction: unlocks the fourth.
 - The nine Tavern heroes unlock one per zone cleared, in play order (`ZONE_ORDER`):
   Naga Sea Witch, Dark Ranger, Beastmaster, Pandaren Brewmaster, Firelord, Goblin Tinker,
@@ -251,6 +252,36 @@ few talent ranks and items are in. About **30 level-ups** per 10-minute run inst
   available, and the minute the hero would die without the test's healing. Every tuning change is
   checked against the targets above, then confirmed in a few real engine runs.
 
+## 6. Scripted events and quests (phase 6, added 2026-11-01)
+
+Goal: runs get Warcraft III-style quests and scripted events between the waves. Finishing them earns
+achievements, and those unlock content, as in phase 3.
+
+What exists: the engine already implements Warcraft III's quest natives (`CreateQuest`, `QuestSetTitle`,
+`QuestSetDescription`, `QuestSetCompleted` / `Failed`, `QuestCreateItem`, `QuestItemSetCompleted`,
+`FlashQuestDialogButton`), timer dialogs, multiboards, leaderboards, regions with enter events, minimap pings and
+timed text. The script can use them as a Reforged map would, so the same code works in both.
+
+Proposal:
+
+- **Quest tracker:** a small HUD panel (like WoW's objective tracker) with each active quest and its
+  progress, plus the quests in the Warcraft III quest log. The engine's stock quest key stays off
+  (`cl_fkeys`); a rebindable action opens the log.
+- **Events** (a few per run, announced with a timer dialog, a minimap ping and a line of text):
+  - *Rescue:* captives in a cage; stand by them for some seconds while the horde pushes in.
+  - *Defend:* a shrine, caravan or moonwell with its own health bar, for a minute.
+  - *Hunt:* a rare creep that runs; kill it before the timer ends.
+  - *Ritual:* destroy three totems, crystals or corrupted moonwells around the arena in time.
+- **Zone quests:** two or three named quests per zone from its lore (Ashenvale's Sentinels, Westfall's
+  Defias, the Scourge's necropolises), counted across a run: slay so many of a unit, free the captives,
+  defeat a boss before a time.
+- **Rewards:** in the run, gold, a card hand, healing or a better boss drop. Between runs, achievements
+  (per zone's quests, quest totals, flawless events) that unlock content.
+- **Decisions for later:** what quest achievements unlock (heroes, talents, zones, cosmetic hero skins),
+  how many events per run, and whether the tracker or the Warcraft III quest log is the main view.
+
+Comes after phase 5, because events change the pacing that phase 5 tunes.
+
 ## Order of work
 
 Each phase is playable, tested (smoke test, engine runs) and committed on its own.
@@ -260,6 +291,7 @@ Each phase is playable, tested (smoke test, engine runs) and committed on its ow
 3. **Unlocks.** Talents, heroes, and the new achievements.
 4. **Items.**
 5. **Difficulty tuning** with the balance report, then more rounds after play testing.
+6. **Events and quests.**
 
 Phase 1 comes first because everything else uses the new stats. Phases 2 to 4 can then go in any order.
 

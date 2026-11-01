@@ -1525,9 +1525,10 @@ do
         function(p) return keystoneRating(p), 1500 end)
 
     -- Heroes: the first of each faction is open from the start, the others
-    -- join in a chain: survive 5:00 with the first, defeat a boss with the
-    -- second, win a run with the faction. Tavern heroes join one per zone
-    -- cleared, in play order. hero.unlock is the achievement that opens it.
+    -- join in a chain, each step harder: slay a boss with the first (they
+    -- come at 2:00 and 4:00), survive 5:00 with the second, win a run with
+    -- the faction. Tavern heroes join one per zone cleared, in play order.
+    -- hero.unlock is the achievement that opens it.
     for fi, faction in ipairs(FACTIONS) do
         local list = {}
         for _, hero in ipairs(HEROES) do
@@ -1541,11 +1542,11 @@ do
             end
         else
             local first, second, third = list[1], list[2], list[3]
-            achievement('join_' .. second.id, second.name .. ' Joins', 'Survive 5:00 with the ' .. first.name .. '.',
-                '', second.icon, 10, function(p) return p.heroTime[first.id] or 0, 300 end)
+            achievement('join_' .. second.id, second.name .. ' Joins', 'Defeat a boss with the ' .. first.name .. '.',
+                '', second.icon, 10, function(p) return p.heroBosses[first.id] or 0, 1 end)
             second.unlock = 'join_' .. second.id
-            achievement('join_' .. third.id, third.name .. ' Joins', 'Defeat a boss with the ' .. second.name .. '.',
-                '', third.icon, 15, function(p) return p.heroBosses[second.id] or 0, 1 end)
+            achievement('join_' .. third.id, third.name .. ' Joins', 'Survive 5:00 with the ' .. second.name .. '.',
+                '', third.icon, 15, function(p) return p.heroTime[second.id] or 0, 300 end)
             third.unlock = 'join_' .. third.id
             list[4].unlock = 'faction' .. fi
         end

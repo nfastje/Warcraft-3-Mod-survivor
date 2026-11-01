@@ -254,7 +254,7 @@ SDK), host-authoritative, agreed balance, resource estimates. The user is still 
   switch browser tabs in Chrome: the web build needs other card keys.
 - Phase 3 (2026-11-01): unlocks. `talent.unlock` / `hero.unlock` name an achievement (`ACH_BY_KEY`);
   `Profile.talentOpen`, `Profile.heroOpen`, `Profile.unlockText`. Hero chains are built after the achievement
-  list ("<Hero> Joins" achievements read `p.heroTime` / `p.heroBosses`, kept by `G.endRun`). Starting heroes:
+  list ("<Hero> Joins": a boss with the first hero via `p.heroBosses`, 5:00 with the second via `p.heroTime`, kept by `G.endRun`). Starting heroes:
   Archmage, Blademaster, Death Knight, Demon Hunter. `Lobby.enter` refuses a locked hero; tests that call
   `G.startRun` directly (or `survivor_run`) are not gated.
 - Loading screens never reach `+screenshot`; capture only the game window with `PrintWindow`.

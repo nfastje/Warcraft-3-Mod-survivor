@@ -256,7 +256,7 @@ note(string.format('endless: %.0f s, health x%.2f, +%d kills, +%d bosses', run.t
     run.kills - killsBanked, run.bosses - bossesBefore))
 MOCK.click('Return to Camp')
 check(R() == nil and S.screen == 'lobby', 'back in lobby')
--- The Archmage's win opens the Mountain King (5:00 survived), the Blood
+-- The Archmage's win opens the Mountain King (a boss slain), the Blood
 -- Mage (an Alliance win), Naga (the first zone cleared) and two talents.
 local function heroById(id)
     for _, hero in ipairs(HEROES) do
@@ -266,7 +266,7 @@ end
 for _, id in ipairs({'Hmkg', 'Hblm', 'Nngs'}) do
     check(Profile.heroOpen(heroById(id)), id .. ' joins after the win')
 end
-check(not Profile.heroOpen(heroById('Hpal')), 'the Paladin waits for a boss slain with the Mountain King')
+check(not Profile.heroOpen(heroById('Hpal')), 'the Paladin waits for 5:00 survived with the Mountain King')
 for _, talent in ipairs(upvalue(Profile.applyBonuses, 'TALENTS')) do
     if talent.key == 'swiftness' or talent.key == 'magnetism' then
         check(Profile.talentOpen(talent), talent.key .. ' opens after the win')
