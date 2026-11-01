@@ -1,15 +1,20 @@
 param(
     [string]$WarcraftDataDir = 'C:\Program Files (x86)\Warcraft III (Legacy)',
-    # Folder under release\ (an existing one is moved aside to .previous-<stamp>).
-    # The shared zip is built with -Name 'Warcraft Survivors'.
-    [string]$Name = 'Warcraft Survivors Portable'
+    # Folder under the output folder (an existing one is moved aside to
+    # .previous-<stamp>, older ones deleted). The shared zip is built with
+    # -Name 'Warcraft Survivors' (make_upload.ps1 does).
+    [string]$Name = 'Warcraft Survivors Portable',
+    # Builds go to engine\build\portable: release\ holds only the site's upload
+    # copy (make_upload.ps1).
+    [string]$OutDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path (Split-Path $PSScriptRoot)
 $dist = Join-Path $root 'engine\dist\windows'
-$out = Join-Path $root 'release'
+$out = if ($OutDir) { $OutDir } else { Join-Path $root 'engine\build\portable' }
+New-Item -ItemType Directory -Force -Path $out | Out-Null
 $destination = Join-Path $out $Name
 $stage = Join-Path $out "$Name.stage"
 $runtime = Join-Path $stage 'OpenRealm'
@@ -94,6 +99,8 @@ your progress.
 if ($LASTEXITCODE -ne 0) { throw "portable_manifest.py write failed ($LASTEXITCODE)" }
 
 $backup = $null
+# Keep one previous build at most (each is ~200 MB).
+Get-ChildItem -LiteralPath $out -Directory -Filter "$Name.previous-*" | Remove-Item -Recurse -Force
 if (Test-Path -LiteralPath $destination) {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $backup = Join-Path $out "$Name.previous-$stamp"

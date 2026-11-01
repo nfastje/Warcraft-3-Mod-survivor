@@ -61,6 +61,17 @@ survivor game (exe + web) built on it, using the Legacy 1.29 TFT data.
   Same day, a Reddit tester (Edge): black world with the default Warcraft III UI showing. The hero's native chase of
   ranged attackers (Plaguelands casters too) was fixed the same day (see Engine problems); whether it caused these
   reports is unproven: ask testers again after 1.2.0.
+- **Release procedure (the user's rule, 2026-11-01: every time).** After raising `version`/`notes` in
+  `src/engine_boot.lua`, run `powershell -ExecutionPolicy Bypass -File tools\release\make_upload.ps1`
+  (`-SkipNative`/`-SkipWeb`/`-SkipPortable` for steps already done). It builds the native and browser engines, the
+  trimmed data and the portable build, stages the site, then:
+  - **`release\` = exactly the site's web root** (page, `.htaccess`, `data\`, `download\` with the zip and
+    `portable\`), mirrored with robocopy `/MIR` (anything else in it is deleted). The user opens it in WinSCP and
+    copies everything. Nothing else may be written into `release\`.
+  - **`engine\build\web\survivor-upload\download\Warcraft Survivors\WarcraftSurvivors.exe`**: the same portable
+    build, playable, for the user to test locally before uploading (placed after the mirror, never uploaded).
+  - Build outputs live in `engine\build\portable\` (portable folder + one `.previous-*`, `WarcraftSurvivors.zip`,
+    `update\portable\`, the tester SFX). The paths below that say `release\` now mean that folder.
 - Tester build: `powershell -ExecutionPolicy Bypass -File tools\release\make_release.ps1` writes
   `release\WarcraftSurvivors.exe` (7-Zip SFX, ~4 MB: engine + `src/` scripts + `Play Warcraft Survivors.bat`,
   which finds or asks for the tester's own 1.29 install and keeps it in `wc3path.txt`). No Blizzard data inside.
@@ -359,6 +370,32 @@ The same Lua file as the Reforged map, unchanged. Engine-side pieces (all on bra
   merge. Before, the spirits lasted one cooldown and, at high rank, the split recast itself forever.
 - 2026-10-30: Warden and Priestess of the Moon carry Shadowmeld (`Ashm`, `UnitAbilities.slk`); the script moves
   the hero, so the engine saw it standing still and hid it at night. The hero (and Mirror Images) lose `Ashm`.
+- 2026-11-01, features ported in spirit from the Reforged fork (stock 1.29 art only, nothing imported):
+  - **Medivh** (Tavern, hero 25): the campaign's `nmed`, a plain unit (hero natives are no-ops). His model has no
+    Attack/Spell, only `Spell Attack` (hero fields `attackAnim`/`castAnim` = `spell`, kept in `R.attackAnim/castAnim`).
+    Kit: Arcane Barrage (Mana Flare art), Raven Form (buff `morph = 'alternate'`: `AddUnitAnimationProperties` turns
+    him into the raven, `Attack Alternate` for swings; `fly` = no collision), Enchanted Crows (orbit, Destroyer
+    missile), Dark Portal (summons `ogru`, then `nchg` from rank 3). Icons BTNManaFlare/RavenForm/EnchantedCrows/DarkPortal.
+  - **World objects** (`G.spawnWorldObject`, `WORLD_OBJECTS`, after Forgotten Hollow): Mine Cart, Barrel, Wooden
+    Chest (paid, card hand), Pile of Treasure, Standard of Wealth, Shrine of Chance (paid, 55 percent hand), Shrine of
+    Protection (10 s with no enemy near). Three at the start, one every 58-78 s, at most 6, gone after 100 s; walking
+    within 150 uses one. Gold swirl (`GeneralAuraTarget`), a yellow ring (engine telegraph with a 100000 s cast, stopped
+    on removal; Reforged has none), a permanent text tag for prices. Test aid: `+set survivor_objects all`.
+  - **Hold to move**: the script sets `cl_smart_hold 1`; a held Smart button (right mouse) sends the ground point
+    under the cursor every `cl_smart_hold_ms` (100) and at the press (`CL_SmartHoldFrame` in `client/cl_input.c`,
+    ground only, never over the HUD). Test command `cursor <x> <y>` pushes a real mouse motion (hidden windows keep
+    the cursor at 0,0, over the hero frame); `+smart`/`-smart` in a cfg hold and release.
+  - **Touch** (browser): `cl_touch_smart 1` (script) makes a single finger on the world a held right button (the HUD
+    and menus keep the left click). `survivor.js` sets `survivor_touch 1` on a coarse-pointer touch device; the
+    script then forces mouse movement, shows a touch footer and a HUD Menu button (no Escape key on a phone).
+  - **Collision** (`G.collide`): enemies block the scripted walk with their pathing radius (`EngineUnitCollision`,
+    engine-only; `BlzGetUnitCollisionSize` on Reforged), scaled for bosses/elites; only steps toward an enemy are held
+    back. Always on (the user's rule, 2026-11-01: no option to turn it off); Raven Form and Wind Walk pass through.
+  - Blood (`FX.heroBlood`, CritterBloodAlbatross) on the hero at most every 0.2 s; Transmute 1.2 percent per rank.
+  - Test add-on `tools/engine_tests/test_medivh.lua`: heals every player unit (Medivh is not `UNIT_TYPE_HERO`, which
+    `test_plague.lua` heals), logs `MEDIVH` lines (position, sequence, upper clip), wolf packs every `medivh_pack` s.
+  - `web_trace.py`: heroes beyond two per zone get a `heroNN` session (test_medivh, all objects, `medivh_spawn` = every
+    unit their summons call); `reads --add <dirs>` merges traces of `run --only ...` into the current list.
 - Test aid: `+set survivor_autopick 1` (engine) picks the first card of every hand after 0.3 s. Use it for any
   unattended run longer than a minute: `pickcards.cfg` presses are frame-counted and run out within seconds
   when `com_maxfps_background 0` lets a hidden window render hundreds of frames per second.
@@ -394,6 +431,12 @@ The same Lua file as the Reforged map, unchanged. Engine-side pieces (all on bra
   `audit_seconds`, `moveanim_clicks 0` = no scripted orders) logs slots, the hero's speed/animation/native order and
   counts the script's own `SetUnitX` calls on the hero (`scriptMoves`): movement with `scriptMoves=0` is native.
   The crash the user saw there was not reproduced (4 min Northrend after the fix, clean).
+- Engine unit tests on Windows: from MSYS2 (see Quick rebuild), `export PATH="$PWD/build-windows/lib:$PATH"` first
+  (mpqtool and the tests need the DLLs, else exit 127), `make ... openwarcraft3-tests test-assets`, then
+  `build-windows/bin/openwarcraft3-tests.exe -data build/tests +dedicated 1 +test "client_input.<name>"`.
+  **Open (upstream, 2026-11-01):** `client_input.quick_arrow_press_is_sampled_before_release` kills the process
+  (exit 127, also on the committed baseline): it copies `struct client_state` onto the stack, where the other tests
+  `MemAlloc` it. So `+test "client_input.*"` dies there; run the tests one by one.
 - 2026-10-31: F1-F11 run none of their stock binds (hero select, `save quick`, stock game menu, quests, allies) when
   `cl_fkeys` is 0 (`Key_Event` in `client/keys.c`; script key events still get them). The script sets it in `G.boot`.
 - 2026-10-31: icon: `python tools/make_icon.py <FRIZQT__.TTF> tools/release/warcraft_survivors.ico [preview] [icons dir]`
@@ -534,6 +577,12 @@ The same Lua file as the Reforged map, unchanged. Engine-side pieces (all on bra
 ## Mistakes log
 
 Every mistake Claude makes in this project is recorded here, with the lesson.
+
+- **2026-11-01:** The first `web_trace.py reads --add` merged the new traces into the list but counted only their
+  names as known, so ~70 script paths already listed per archive came back as duplicate `*` lines (caught in the
+  diff before any data was built). The first Medivh trace also missed the chaos grunts his Dark Portal calls only
+  from rank 3. Lesson: diff a regenerated list against the old one before using it, and trace what higher ranks
+  and random spawns bring, not only what a short run happens to show.
 
 - **2026-10-31:** During the Northrend audit a Python patch with `\037` went through a Bash heredoc again (sixth time);
   its assert caught it and nothing was written. Lesson unchanged: anything with `\` goes through the Edit tool.

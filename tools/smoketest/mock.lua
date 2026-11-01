@@ -153,6 +153,8 @@ function SetUnitVertexColor(u, r, g, b, a) int('SetUnitVertexColor', r); u.alpha
 function BlzSetUnitName(u, s) u.name = s end
 function GetUnitName(u) return u.name end
 function SetUnitAnimation(u, a) u.anim = a end
+function AddUnitAnimationProperties(u, tag, add) assert(type(tag) == 'string'); u.props = add and tag or nil end
+function BlzGetUnitCollisionSize(u) return u.hero and 32 or 16 end
 function QueueUnitAnimation() end
 function SetUnitTimeScale() end
 function BlzSetUnitFacingEx() end
@@ -246,14 +248,25 @@ function BlzSetSpecialEffectZ() end
 function BlzSetSpecialEffectColor(e, r, g, b) int('BlzSetSpecialEffectColor', r) end
 function AddLightningEx() return handle('lightning', {}) end
 function DestroyLightning() end
-function CreateTextTag() return handle('texttag', {}) end
+local textTags = {}
+function CreateTextTag() local t = handle('texttag', {}); textTags[#textTags + 1] = t; return t end
+-- Permanent text tags (price labels) never expire: each must be destroyed.
+function MOCK.liveTags()
+    local live = {}
+    for _, t in ipairs(textTags) do
+        if t.permanent and not t.dead then live[#live + 1] = t end
+    end
+    return live
+end
 function SetTextTagText(t, s) assert(type(s) == 'string') end
 function SetTextTagPos() end
 function SetTextTagColor(t, r, g, b, a) int('SetTextTagColor', r) end
 function SetTextTagVelocity() end
-function SetTextTagPermanent() end
+function SetTextTagPermanent(t, on) t.permanent = on end
 function SetTextTagLifespan() end
 function SetTextTagFadepoint() end
+function SetTextTagVisibility() end
+function DestroyTextTag(t) assert(t and t.__kind == 'texttag', 'DestroyTextTag on non-tag'); assert(not t.dead, 'text tag destroyed twice'); t.dead = true end
 
 -- Abilities: icons and tooltips
 function BlzGetAbilityIcon(id) return 'ReplaceableTextures\\CommandButtons\\BTN' .. code(id) .. '.blp' end

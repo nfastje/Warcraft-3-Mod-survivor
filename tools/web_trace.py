@@ -7,13 +7,18 @@ archive has). This runs hidden, muted sessions under it:
 - every zone (ZONES in src/ashenvale_survivor.lua): its whole enemy roster and
   bosses spawned every 10 s (test_plague.lua, which also keeps the hero alive),
   two heroes (the run's hero and one spawned) and both their spell pools, so
-  the 12 runs cover all 24 heroes and every spell;
+  the 12 runs cover the first 24 heroes and their spells;
+- every hero beyond those (Medivh): a run of its own with its whole pool, packs
+  that trigger "when surrounded" spells and every world object kind at once
+  (test_medivh.lua, survivor_objects all);
 - entering every zone from the menu (test_zone_change.lua: its loading screen);
 - every lobby tab and options page, the hero model grid, every icon the script
   can show (test_icons.lua, generated), one defeat (end screen).
 
   python tools/web_trace.py run <trace dir>                 # on the Legacy install
   python tools/web_trace.py reads <trace dir> [more dirs]   # -> tools/web_trace_reads.txt
+  python tools/web_trace.py run <dir> --only hero25 icons   # new content only, then:
+  python tools/web_trace.py reads --add <dir>               #   added to the current list
   python tools/web_trace.py run <dir2> --data engine/build/web/survivor/data
   python tools/web_trace.py compare <trace dir> <dir2>      # files the trimmed data lost
 
@@ -67,7 +72,7 @@ def script_data():
     for group in re.findall(r"music = \{([^}]*)\}", src):
         music.update(re.findall(r"'(\w+)'", group))
     music.update(re.findall(r"G\.playMusic\(\{'(\w+)'\}\)", src))
-    if len(heroes) != 2 * len(zones) or len(maps) != len(zones):
+    if len(heroes) < 2 * len(zones) or len(maps) != len(zones):
         raise SystemExit("unexpected script layout: %d heroes, %d zones, %d arenas" %
                          (len(heroes), len(zones), len(maps)))
     return heroes, zones, maps, music
@@ -140,6 +145,26 @@ def plan(data, seconds):
             "+set", "survivor_spells", " ".join(pool + other_pool),
             "+set", "plague_units", " ".join(zones[z - 1] + [other_id]),
             "+set", "plague_len", "9999", "+set", "plague_move", "1", "+map", maps[z]]))
+    # Heroes beyond two per zone (Medivh, a plain unit test_plague.lua would not
+    # heal): their own run with the whole pool, packs that trigger "when
+    # surrounded" spells, and every world object kind at once.
+    src = (ROOT / "src" / "ashenvale_survivor.lua").read_text(encoding="utf-8")
+    for index in range(2 * half + 1, len(heroes) + 1):
+        hero_id, pool = heroes[index - 1]
+        # Every unit its summons can call (higher ranks call other types).
+        summoned = []
+        for key in pool:
+            m = re.search(r"spell\('%s', \{[^}]*?units = \{([^}]*)\}" % key, src, re.S)
+            for uid in re.findall(r"'(\w{4})'", m.group(1)) if m else []:
+                if uid not in summoned:
+                    summoned.append(uid)
+        runs.append(("hero%02d" % index, seconds, common + [
+            "+set", "medivh_spawn", " ".join(summoned),
+            "+set", "wc3_lua_script", SCRIPTS + ",Scripts/Survivor/test_medivh.lua",
+            "+set", "survivor_run", "%d 1 1 2" % index,
+            "+set", "survivor_spells", " ".join(pool),
+            "+set", "survivor_objects", "all",
+            "+set", "medivh_hero", hero_id, "+set", "medivh_len", "9999", "+map", maps[1]]))
     # Entering each zone from the menu, as the lobby does: its loading screen.
     for z in range(1, half + 1):
         runs.append(("enter%02d" % z, 30, common + [
@@ -253,6 +278,13 @@ def reads(args):
         misses |= dir_misses
     lines = {"%s\t%s" % r for r in found}
     known = {name.upper() for _, name in found}
+    if args.add and READS.is_file():
+        # Only the new sessions were traced (run --only): keep the list's
+        # earlier files (known, so not listed twice) and add these traces'.
+        for line in READS.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                lines.add(line)
+                known.add(line.partition("\t")[2].upper())
     listed = listfile()
     # A trimmed-data trace misses what the trim lost. Most misses are probes for
     # files that exist nowhere (.mdl before .mdx): keep only listed names.
@@ -303,6 +335,7 @@ def main():
     p.add_argument("--only", nargs="*", help="run only these sessions (zone01, tab_codex, icons...)")
     p = sub.add_parser("reads")
     p.add_argument("dirs", nargs="+", help="trace dirs (merged: each run plays out differently)")
+    p.add_argument("--add", action="store_true", help="keep the current list and add these traces' files")
     p = sub.add_parser("compare")
     p.add_argument("full")
     p.add_argument("trimmed")

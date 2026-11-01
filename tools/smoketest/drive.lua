@@ -346,6 +346,59 @@ G.endRun(false)
 MOCK.click('Return to Camp')
 Profile.data.perks.companion = nil
 
+-- World objects: three lie near the start; walking onto a free one pays out,
+-- a paid chest waits for the gold, then opens a card hand.
+S.heroIndex, S.difficulty = 1, 1
+G.startRun()
+run = R()
+check(#run.interactables == 3, 'a run starts with three world objects, got ' .. #run.interactables)
+local function objectOf(kind)
+    for _, o in ipairs(run.interactables) do
+        if o.kind == kind then return o end
+    end
+end
+local function standOn(o)
+    SetUnitX(run.hero, o.x)
+    SetUnitY(run.hero, o.y)
+end
+local vein = objectOf('vein')
+local goldBefore = run.gold
+standOn(vein)
+MOCK.advance(0.1)
+check(objectOf('vein') == nil and run.gold > goldBefore, 'walking onto the gold vein mines it')
+check(vein.fx.dead and vein.glow.dead, 'a used object takes its art away')
+local chest = objectOf('chest')
+check(chest.price == 40 and chest.priceTag ~= nil, 'the chest shows its price')
+run.gold = 0
+standOn(chest)
+MOCK.advance(0.5)
+check(objectOf('chest') == chest, 'a chest without the gold stays shut')
+run.gold = 1000
+MOCK.advance(0.5)
+check(objectOf('chest') == nil and run.worldChestsOpened == 1, 'the chest opens once the gold is there')
+check(run.hand ~= nil or run.pendingChests > 0, 'the chest deals a card hand')
+check(chest.priceTag == nil, 'its price tag goes with it')
+if run.hand then MOCK.tap(OSKEY_1) end
+-- Bodies block: a step into an enemy is held back, and a step away is free.
+G.refreshEnemyCache()
+local blocker = run.elist[1]
+SetUnitX(blocker, run.hx + 40)
+SetUnitY(blocker, run.hy)
+G.refreshEnemyCache()
+local nx = G.collide(run.hx, run.hy, run.hx + 20, run.hy)
+check(nx <= run.hx + 0.01, 'an enemy in the way blocks the hero, moved ' .. (nx - run.hx))
+nx = G.collide(run.hx, run.hy, run.hx - 20, run.hy)
+check(math.abs(nx - (run.hx - 20)) < 0.01, 'the hero can always step away')
+-- A save from 1.3.0 test builds that turned collision off no longer matters.
+Profile.data.opts.collide = 0
+nx = G.collide(run.hx, run.hy, run.hx + 20, run.hy)
+check(nx <= run.hx + 0.01, 'collision cannot be turned off, moved ' .. (nx - run.hx))
+Profile.data.opts.collide = nil
+G.endRun(false)
+MOCK.click('Return to Camp')
+check(#MOCK.liveTags() == 0, 'no price tag is left after the run')
+note('world objects: vein mined, chest opened for 40 gold, collision blocks')
+
 -- 5. Every hero with every spell of its pool at a high rank (no rank limit).
 for index, hero in ipairs(HEROES) do
     S.heroIndex = index
@@ -370,6 +423,32 @@ for index, hero in ipairs(HEROES) do
         check(math.abs(life - GetWidgetLife(image) - 30) < 0.01, 'mirror images take triple damage, lost '
             .. (life - GetWidgetLife(image)))
         note('mirror image takes 10 x 3')
+    end
+    if run.spellByKey.raven_form then
+        -- Medivh turns into the raven (the Alternate sequences), flies over
+        -- enemies, and comes back to his own attack when it ends.
+        local CAST = upvalue(G.updateSpells, 'CAST')
+        local inst = run.spellByKey.raven_form
+        MOCK.advance(0.1)
+        if run.hand then MOCK.tap(OSKEY_1) end
+        for _ = 1, 5 do
+            G.createEnemy(G.pickEnemyType(), run.hx + 60, run.hy, {})
+        end
+        G.refreshEnemyCache()
+        check(run.buffs.raven_form or CAST.buff(inst, inst.v), 'raven form casts when surrounded')
+        check(run.hero.props == 'alternate' and run.attackAnim == 'attack', 'medivh becomes the raven')
+        local nx = G.collide(run.hx, run.hy, run.hx + 20, run.hy)
+        check(math.abs(nx - (run.hx + 20)) < 0.01, 'the raven flies over enemies')
+        for _ = 1, math.ceil(inst.v.dur / 0.25) + 4 do
+            MOCK.advance(0.25)
+            if run.hand then MOCK.tap(OSKEY_1) end
+        end
+        check(run.buffs.raven_form == nil or run.buffs.raven_form.untilT > run.time, 'raven form ends')
+        if run.buffs.raven_form == nil then
+            check(run.hero.props == nil and run.attackAnim == 'spell', 'medivh takes his own form back, attack '
+                .. tostring(run.attackAnim))
+        end
+        note('medivh raven form morphs and flies')
     end
     if run.spellByKey.storm_earth_fire then
         -- The Brewmaster splits into three spirits, hidden and invulnerable,

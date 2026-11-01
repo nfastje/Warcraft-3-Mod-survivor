@@ -22,3 +22,6 @@ map/*.w3mTemp/
 __pycache__/
 *.pyc
 *.pld
+
+# Reference maps supplied by the user (Blizzard data)
+/Custom map/

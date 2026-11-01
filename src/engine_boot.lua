@@ -22,8 +22,8 @@ SURVIVOR_ENGINE = {
     -- copies both into the portable build's version.json; the portable launcher
     -- compares it with the one under update (the uploaded release) and the
     -- lobby offers the newer one (Updater). Raise the version for every release.
-    version = '1.2.0',
-    notes = 'Your hero no longer fights back on its own when hit: it used to chase ranged enemies (Northrend\'s ice trolls, Plaguelands casters), which made it run too fast and cut Bladestorm short. F1 to F11 no longer open Warcraft III menus or save the game. Warcraft Survivors has its own icon.',
+    version = '1.3.0',
+    notes = 'New Tavern hero: Medivh, the Last Guardian (Arcane Barrage, Raven Form, Enchanted Crows, Dark Portal). Chests, shrines and treasure now lie in every zone: walk up to one to use it. Hold the right mouse button and your hero follows the cursor; on a phone or tablet, hold a finger on the ground. Enemies block your way as in Warcraft III. Blood splashes when you are hit. Transmute gives less gold.',
     update = 'https://warcraftsurvivor.para-bellum.eu/download/portable/',
     arenas = {
         [1] = {map = 'Maps\\FrozenThrone\\(6)Moonglade.w3x', loading = 34},   -- Ashenvale: Ashenvale tileset, Night Elf art

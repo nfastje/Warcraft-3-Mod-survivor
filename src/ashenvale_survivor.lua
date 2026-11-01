@@ -33,6 +33,9 @@ do
         MAX_PICKUPS = 220,
         SPELL_SLOTS = 4,             -- spells and blessings have no rank limit
         MAX_SUMMONS = 120,           -- pets alive at once (Persistence stacks them up)
+        MAX_WORLD_OBJECTS = 6,       -- chests, shrines and treasure lying in the arena at once
+        WORLD_OBJECT_REACH = 150.0,  -- walking this close to one uses it
+        HIT_FEEDBACK = 0.2,          -- seconds between two blood splashes on the hero
         HAND_SIZE = 3,
         BASE_PICKUP = 170.0,
         BASE_REROLLS = 2,
@@ -167,7 +170,17 @@ do
         gemLarge = 'Abilities\\Weapons\\RedDragonBreath\\RedDragonMissile.mdl',
         coin = 'Objects\\InventoryItems\\PotofGold\\PotofGold.mdl',
         rune = 'Objects\\InventoryItems\\runicobject\\runicobject.mdl',
-        chest = 'Objects\\InventoryItems\\TreasureChest\\treasurechest.mdl'
+        chest = 'Objects\\InventoryItems\\TreasureChest\\treasurechest.mdl',
+        -- A hit on the hero: the campaign's blood splash (Forgotten Hollow).
+        heroBlood = 'Objects\\Spawnmodels\\Critters\\Albatross\\CritterBloodAlbatross.mdl',
+        -- Golden swirl around a world object (chest, shrine, treasure).
+        objectGlow = 'Abilities\\Spells\\Other\\GeneralAuraTarget\\GeneralAuraTarget.mdl',
+        -- Medivh
+        manaFlare = 'Abilities\\Spells\\Human\\ManaFlare\\ManaFlareMissile.mdl',
+        manaFlareHit = 'Abilities\\Spells\\Human\\ManaFlare\\ManaFlareBoltImpact.mdl',
+        -- Dark crows: the Destroyer's shadow missile (Medivh's power was Sargeras').
+        stormCrow = 'Abilities\\Weapons\\AvengerMissile\\AvengerMissile.mdl',
+        darkPortal = 'Abilities\\Spells\\Demon\\DarkPortal\\DarkPortalTarget.mdl'
     }
 
     -- WoW item-quality colours, used for card rarities and zone tiers.
@@ -298,7 +311,14 @@ do
             start = 'acid_bomb', pool = {'healing_spray', 'chemical_rage', 'acid_bomb', 'transmute'}},
         {id = 'Nplh', name = 'Pit Lord', faction = 'Tavern', icon = 'BTNPitLord', role = 'Demon',
             hp = 540, damage = 34, blurb = 'Rains fire on the battlefield and cleaves what survives.',
-            start = 'rain_of_fire', pool = {'rain_of_fire', 'howl_of_terror', 'cleave', 'doom'}}
+            start = 'rain_of_fire', pool = {'rain_of_fire', 'howl_of_terror', 'cleave', 'doom'}},
+        -- Not a Warcraft III hero: the campaign's Prophet (nmed, a plain unit).
+        -- His model has no Attack or Spell of its own, only Spell Attack, and a
+        -- raven form (the Alternate sequences, see Raven Form).
+        {id = 'nmed', name = 'Medivh', faction = 'Tavern', icon = 'BTNMedivh', role = 'Last Guardian',
+            attackAnim = 'spell', castAnim = 'spell',
+            hp = 350, damage = 28, blurb = 'The Last Guardian of Tirisfal: arcane fire, a storm of crows, and the portal that let the Horde in.',
+            start = 'arcane_barrage', pool = {'arcane_barrage', 'raven_form', 'enchanted_crows', 'dark_portal'}}
     }
 
     ---------------------------------------------------------------------------
@@ -677,12 +697,27 @@ do
         apply = function(s, v) s.attackSpeed = s.attackSpeed + v.bonus; s.move = s.move + 0.15 end,
         desc = 'Smashes the potion for {dmg} damage within {radius}, then has +{pct2}\037 attack speed and +15\037 movement speed for {dur} sec.'})
     spell('transmute', {name = 'Transmute', code = 'ANtm', icon = 'BTNTransmute', kind = 'bolt', cd = 6.0, dmg = 90, count = 1,
-        range = 850, instant = true, prefersBoss = true, impact = FX.transmute, per = 0.04,
-        apply = function(s, v) s.killGold = s.killGold + v.amount; s.gold = s.gold + v.amount * 2 end,
-        desc = 'Turns the strongest enemy in reach to gold for {dmg} damage. Kills have a {pct}\037 chance to drop gold; +{pct2b}\037 gold.'})
+        range = 850, instant = true, prefersBoss = true, impact = FX.transmute, per = 0.012,
+        apply = function(s, v) s.killGold = s.killGold + v.amount; s.gold = s.gold + v.amount end,
+        desc = 'Turns the strongest enemy in reach to gold for {dmg} damage. Kills have a {pct}\037 chance to drop gold; +{pct}\037 gold.'})
     spell('doom', {name = 'Doom', code = 'ANdo', icon = 'BTNDoom', kind = 'bolt', cd = 8.0, dmg = 160, count = 1, countEvery = 3,
         range = 900, instant = true, impact = FX.doom, prefersBoss = true,
         desc = 'Dooms {count} enemy for {dmg} damage. Prefers bosses and elites.'})
+
+    -- Medivh (campaign art only: none of these is one of his abilities in the game).
+    spell('arcane_barrage', {name = 'Arcane Barrage', icon = 'BTNManaFlare', kind = 'bolt', cd = 2.2, dmg = 22, count = 3,
+        countEvery = 2, range = 900, missile = FX.manaFlare, speed = 1100, impact = FX.manaFlareHit, scale = 0.9,
+        desc = 'Looses {count} bolts of arcane fire at the nearest enemies for {dmg} damage each.'})
+    spell('raven_form', {name = 'Raven Form', icon = 'BTNRavenForm', kind = 'buff', cd = 18.0, dur = 6, per = 0.05,
+        basePct = 0.15, trigger = 'enemies', morph = 'alternate', fly = true, burstFx = FX.blink, dmg = 40, radius = 240,
+        apply = function(s, v) s.move = s.move + 0.4; s.dodge = s.dodge + v.bonus end,
+        desc = 'When surrounded, bursts into a raven for {dur} sec ({dmg} damage within {radius}): flies over enemies, +40\037 movement speed and +{pct2}\037 dodge.'})
+    spell('enchanted_crows', {name = 'Enchanted Crows', icon = 'BTNEnchantedCrows', kind = 'orbit', count = 2, countEvery = 2,
+        dmg = 20, orbitRadius = 220, hitRadius = 85, speed = 2.0, missile = FX.stormCrow, scale = 1.1,
+        desc = '{count} enchanted storm crows circle Medivh, striking enemies they pass for {dmg} damage.'})
+    spell('dark_portal', {name = 'Dark Portal', icon = 'BTNDarkPortal', kind = 'summon', cd = 18.0, count = 2, countEvery = 2,
+        units = {'ogru', 'ogru', 'nchg', 'nchg', 'nchg'}, dmg = 26, hp = 520, birth = FX.darkPortal,
+        desc = 'Tears open the Dark Portal: {count} orc warriors charge through and fight for {dur} sec. Each strikes for {dmg}.'})
 
     -- The codex lists, in hero order, only the spells some hero's pool offers.
     for _, hero in ipairs(HEROES) do
@@ -2575,6 +2610,269 @@ do
         R.gold = R.gold + amount * (1 + R.stats.gold)
     end
 
+    ---------------------------------------------------------------------------
+    -- World objects (after the campaign's Forgotten Hollow): chests, shrines
+    -- and treasure lying in the arena. Walking up to one uses it. Stock 1.29
+    -- doodads and items, a golden light over each and a yellow ring on the
+    -- ground (an engine telegraph that never fills; Reforged shows no ring).
+    -- Paid ones cost run gold, more for every chest opened, and show the price.
+    ---------------------------------------------------------------------------
+    local WORLD_OBJECTS = {
+        chest = {name = 'Wooden Chest', model = FX.chest, scale = 2.0},
+        barrel = {name = 'Barrel', model = {
+            'Buildings\\Other\\BarrelsUnit1\\BarrelsUnit1.mdl',
+            'Buildings\\Other\\BarrelsUnit\\BarrelsUnit.mdl',
+            'Buildings\\Other\\BarrelsUnit0\\BarrelsUnit0.mdl'}, scale = 1.0},
+        treasure = {name = 'Pile of Treasure', model = {
+            'Doodads\\Dungeon\\Props\\TreasurePile\\TreasurePile0.mdl',
+            'Doodads\\Dungeon\\Props\\TreasurePile\\TreasurePile1.mdl'}, scale = 1.0},
+        wealth = {name = 'Standard of Wealth', model = {
+            'Doodads\\Outland\\Props\\Standard\\Standard0.mdl',
+            'Doodads\\Outland\\Props\\Standard\\Standard1.mdl'}, scale = 1.35},
+        -- The campaign's Gold Vein is a rock; a loaded mine cart reads as gold.
+        vein = {name = 'Mine Cart', model = 'Doodads\\Dungeon\\Props\\MineCart\\MineCart.mdl', scale = 1.1},
+        chance = {name = 'Shrine of Chance', model = 'Doodads\\Ruins\\Props\\RuinFountain\\RuinFountain.mdl', scale = 0.9},
+        protection = {name = 'Shrine of Protection', model = 'Doodads\\Ruins\\Props\\Statue\\Statue0.mdl', scale = 0.85}
+    }
+    local WORLD_OBJECT_KINDS = {'barrel', 'treasure', 'vein', 'chest', 'chance', 'protection', 'wealth'}
+
+    -- Price of a paid object: chests climb with every chest (or shrine) used.
+    function G.worldObjectPrice(object)
+        -- Lua's ^ gives a float: whole gold, or the label reads "40.0 gold".
+        local base = math.floor((R.worldChestsOpened + 1) ^ 2 * 40 + 0.5)
+        if object.kind == 'chest' then
+            return base
+        elseif object.kind == 'chance' then
+            return math.floor(base * 0.68)
+        end
+        return nil
+    end
+
+    function G.updateWorldObjectPrice(object)
+        local cost = G.worldObjectPrice(object)
+        if cost == nil or object.price == cost then
+            return
+        end
+        object.price = cost
+        if object.priceTag == nil then
+            object.priceTag = CreateTextTag()
+        end
+        if object.priceTag then
+            SetTextTagText(object.priceTag, U.col(GOLD, tostring(cost) .. ' gold'), 0.026)
+            SetTextTagPos(object.priceTag, object.x - 60, object.y, 210)
+            SetTextTagVelocity(object.priceTag, 0, 0)
+            SetTextTagPermanent(object.priceTag, true)
+            SetTextTagVisibility(object.priceTag, true)
+        end
+    end
+
+    function G.updateWorldObjectPrices()
+        for _, object in ipairs(R.interactables) do
+            G.updateWorldObjectPrice(object)
+        end
+    end
+
+    -- Open walkable ground for an object, away from the others.
+    function G.worldObjectPoint(minR, maxR)
+        local x, y
+        for _ = 1, 10 do
+            x, y = G.spawnPoint(minR, maxR)
+            local clear = G.walkable(x, y)
+            for _, other in ipairs(R.interactables) do
+                local dx, dy = other.x - x, other.y - y
+                if dx * dx + dy * dy < 250 * 250 then
+                    clear = false
+                end
+            end
+            if clear then
+                break
+            end
+        end
+        return x, y
+    end
+
+    function G.spawnWorldObject(kind, x, y, force)
+        local def = WORLD_OBJECTS[kind]
+        if R == nil or def == nil or (#R.interactables >= CFG.MAX_WORLD_OBJECTS and not force) then
+            return nil
+        end
+        local model = def.model
+        if type(model) == 'table' then
+            model = model[GetRandomInt(1, #model)]
+        end
+        local fx = AddSpecialEffect(model, x, y)
+        BlzSetSpecialEffectScale(fx, def.scale)
+        local glow = AddSpecialEffect(FX.objectGlow, x, y)
+        local object = {kind = kind, name = def.name, x = x, y = y, fx = fx, glow = glow, active = true,
+            expires = R.time + 100, time = 0, progress = 0, nextHint = 0}
+        object.ring = G.objectRing(x, y)
+        R.interactables[#R.interactables + 1] = object
+        G.updateWorldObjectPrice(object)
+        return object
+    end
+
+    -- The yellow ground ring under an object, for as long as it lies there.
+    function G.objectRing(x, y)
+        if Engine.active() and type(rawget(_G, 'EngineTelegraph')) == 'function' then
+            return EngineTelegraph({shape = 'ring', x = x, y = y, radius = 96, inner = 78, duration = 100000,
+                r = 255, g = 214, b = 60, a = 200, flash = false})
+        end
+        return nil
+    end
+
+    function G.removeWorldObject(object)
+        if object == nil or not object.active then
+            return
+        end
+        object.active = false
+        DestroyEffect(object.fx)
+        DestroyEffect(object.glow)
+        if object.ring then
+            G.cancelTelegraph(object.ring)
+            object.ring = nil
+        end
+        if object.priceTag then
+            DestroyTextTag(object.priceTag)
+            object.priceTag = nil
+        end
+        local list = R.interactables
+        for i, item in ipairs(list) do
+            if item == object then
+                table.remove(list, i)
+                break
+            end
+        end
+        if R.protectionShrine == object then
+            R.protectionShrine = nil
+        end
+    end
+
+    -- Paid objects take run gold; without enough, a hint at most every 2.5 s.
+    function G.spendRunGold(cost, object)
+        if R.gold < cost then
+            if R.time >= object.nextHint then
+                Hud.banner(U.col(RED, 'Not enough gold') .. '  -  ' .. object.name .. ' costs ' .. cost)
+                object.nextHint = R.time + 2.5
+            end
+            return false
+        end
+        R.gold = R.gold - cost
+        return true
+    end
+
+    function G.activateWorldObject(object)
+        if not object.active or object.challenge then
+            return
+        end
+        local kind = object.kind
+        if kind == 'chest' or kind == 'chance' then
+            local cost = G.worldObjectPrice(object)
+            if not G.spendRunGold(cost, object) then
+                return
+            end
+            R.worldChestsOpened = R.worldChestsOpened + 1
+            if kind == 'chest' or GetRandomReal(0, 1) < 0.55 then
+                R.pendingChests = R.pendingChests + 1
+                Hud.banner(U.col(GOLD, kind == 'chest' and 'Wooden Chest opened' or 'The fountain grants a card hand')
+                    .. '  -  ' .. cost .. ' gold')
+                G.after(0.3, G.tryOpenHand)
+            else
+                Hud.banner(U.col('bfb6a8', 'The fountain keeps your offering') .. '  -  ' .. cost .. ' gold')
+            end
+            G.fx(FX.teleport, object.x, object.y, 0.8)
+            G.removeWorldObject(object)
+            G.updateWorldObjectPrices()
+        elseif kind == 'protection' then
+            if R.protectionShrine then
+                if R.time >= object.nextHint then
+                    Hud.banner(U.col('bfb6a8', 'Another shrine of protection is already awake'))
+                    object.nextHint = R.time + 2.5
+                end
+                return
+            end
+            object.challenge = true
+            object.time = 18
+            object.progress = 0
+            object.expires = R.time + 30
+            R.protectionShrine = object
+            Hud.banner(U.col('ffe680', 'Protect the shrine') .. '  -  keep enemies away from it for 10 seconds')
+        else
+            local ranges = {vein = {50, 100}, barrel = {15, 25}, treasure = {100, 200}, wealth = {250, 500}}
+            local range = ranges[kind]
+            local amount = GetRandomInt(range[1], range[2])
+            G.addGold(amount)
+            Hud.banner(U.col(GOLD, object.name) .. '  -  ' .. amount .. ' gold')
+            G.fx((kind == 'vein' or kind == 'barrel') and FX.explosion or FX.teleport, object.x, object.y, 0.5)
+            G.removeWorldObject(object)
+        end
+    end
+
+    function G.updateWorldObjects(dt)
+        local list = R.interactables
+        local reach = CFG.WORLD_OBJECT_REACH
+        -- The nearest object in reach is used (one per tick).
+        local nearby, nearbyD = nil, reach * reach
+        for _, object in ipairs(list) do
+            if not object.challenge then
+                local dx, dy = R.hx - object.x, R.hy - object.y
+                local d2 = dx * dx + dy * dy
+                if d2 <= nearbyD then
+                    nearby, nearbyD = object, d2
+                end
+            end
+        end
+        if nearby then
+            G.activateWorldObject(nearby)
+        end
+        local i = 1
+        while i <= #list do
+            local object = list[i]
+            if object.challenge then
+                -- Shrine of Protection: 10 s with no enemy within 230 of it,
+                -- before its 18 s run out; pressure drains the progress.
+                object.time = object.time - dt
+                if G.countInRange(object.x, object.y, 230) > 0 then
+                    object.progress = math.max(0, object.progress - dt * 2)
+                else
+                    object.progress = object.progress + dt
+                end
+                if R.time >= object.nextHint then
+                    object.nextHint = R.time + 2
+                    Hud.banner(U.col('ffe680', 'Protect the shrine') .. '  -  '
+                        .. math.ceil(math.max(0, 10 - object.progress)) .. ' seconds')
+                end
+                if object.progress >= 10 then
+                    G.addGold(100)
+                    G.heal(BlzGetUnitMaxHP(R.hero) * 0.15)
+                    G.fx(FX.holyLight, object.x, object.y, 1.0)
+                    Hud.banner(U.col(GREEN, 'Shrine protected') .. '  -  100 gold and healing')
+                    G.removeWorldObject(object)
+                elseif object.time <= 0 or R.time >= object.expires then
+                    Hud.banner(U.col('bfb6a8', 'The shrine falls silent'))
+                    G.removeWorldObject(object)
+                end
+            elseif R.time >= object.expires then
+                G.removeWorldObject(object)
+            end
+            if list[i] == object then
+                i = i + 1
+            end
+        end
+        if R.time >= R.objectClock then
+            R.objectClock = R.time + GetRandomReal(58, 78)
+            if #list < CFG.MAX_WORLD_OBJECTS then
+                local x, y = G.worldObjectPoint(360, 700)
+                G.spawnWorldObject(WORLD_OBJECT_KINDS[GetRandomInt(1, #WORLD_OBJECT_KINDS)], x, y)
+            end
+        end
+    end
+
+    function G.clearWorldObjects()
+        while #R.interactables > 0 do
+            G.removeWorldObject(R.interactables[1])
+        end
+    end
+
     -- Every damage instance in the game passes through here.
     function G.onDamage()
         if R == nil or R.ended then
@@ -2617,6 +2915,11 @@ do
             end
             BlzSetEventDamage(amount)
             R.damageTaken = R.damageTaken + amount
+            -- Blood splashes off the hero (at most one every HIT_FEEDBACK).
+            if amount > 0 and R.time >= R.hitFeedbackAt then
+                R.hitFeedbackAt = R.time + CFG.HIT_FEEDBACK
+                DestroyEffect(AddSpecialEffectTarget(FX.heroBlood, R.hero, 'origin'))
+            end
             return
         end
 
@@ -2777,7 +3080,7 @@ do
             PauseUnit(u, true)
         end
         local info = {xp = def.xp or 1, speed = speed, slowPct = 0, slowUntil = 0, stunUntil = 0, stunned = false,
-            boss = opts.boss, final = opts.final, elite = opts.elite, target = R.hero}
+            boss = opts.boss, final = opts.final, elite = opts.elite, target = R.hero, radius = G.unitRadius(u, 24)}
         R.enemies[u] = info
         R.enemyCount = R.enemyCount + 1
         return u, info
@@ -2790,6 +3093,8 @@ do
             return
         end
         SetUnitScale(u, def.scale, def.scale, def.scale)
+        -- A bigger body blocks more of the way (native collision ignores scale).
+        info.radius = info.radius * math.min(def.scale or 1, 2)
         BlzSetUnitName(u, def.name)
         info.xp = isFinal and 80 or 40
         info.aura = AddSpecialEffectTarget(FX.bossAura, u, 'origin')
@@ -2809,6 +3114,7 @@ do
         local u, info = G.createEnemy(G.pickEnemyType(), x, y, {elite = true})
         if u then
             SetUnitScale(u, 1.4, 1.4, 1.4)
+            info.radius = info.radius * 1.4
             SetUnitVertexColor(u, 255, 220, 90, 255)
             info.xp = 12
             info.aura = AddSpecialEffectTarget(FX.bossAura, u, 'origin')
@@ -3786,7 +4092,7 @@ do
                     end
                 end
                 if def.follow and not def.spinAnim then
-                    G.heroSwing('attack', 0.3)
+                    G.heroSwing(R.attackAnim, 0.3)
                 end
                 G.inRange(x, y, v.radius, function(u)
                     G.damage(u, v.dmg, def.key)
@@ -4053,8 +4359,27 @@ do
             -- Wind Walk: the hero turns see-through while the buff lasts.
             SetUnitVertexColor(R.hero, 255, 255, 255, def.fade)
         end
+        if def.morph then
+            G.setMorph(def.morph, true)
+        end
         G.recomputeStats()
         return true
+    end
+
+    -- Raven Form: the model's Alternate sequences (the raven) take over;
+    -- its only attack is Attack Alternate, used for casts too. The current
+    -- clip is picked again at once (walk stays walk).
+    function G.setMorph(tag, on)
+        AddUnitAnimationProperties(R.hero, tag, on)
+        R.morph = on and tag or nil
+        R.attackAnim = on and 'attack' or (R.def.attackAnim or 'attack')
+        R.castAnim = on and 'attack' or R.def.castAnim
+        if R.upperAnim then
+            R.upperAnim(R.hero, '')
+        end
+        R.anim = ''
+        R.animLock = R.time
+        G.fx(FX.blink, R.hx, R.hy, 1.0)
     end
 
     function G.updateBuffs()
@@ -4069,6 +4394,9 @@ do
                 end
                 if buff.def.fade then
                     SetUnitVertexColor(R.hero, 255, 255, 255, 255)
+                end
+                if buff.def.morph then
+                    G.setMorph(buff.def.morph, false)
                 end
                 R.buffs[key] = nil
                 changed = true
@@ -4170,7 +4498,7 @@ do
                         inst.cd = inst.v.cd
                         -- A standing hero shows the cast (Spell, Spell Slam, ...).
                         if R and not R.ended then
-                            G.heroSwing(inst.def.anim or R.def.castAnim or 'spell', 0.5)
+                            G.heroSwing(inst.def.anim or R.castAnim or 'spell', 0.5)
                             if inst.def.sound then
                                 G.sound(inst.def.sound, R.hx, R.hy)
                             end
@@ -4241,6 +4569,76 @@ do
         end
     end
 
+    -- A unit's collision radius from the game data (the engine's pathing
+    -- value; Reforged has a native for it), or the fallback.
+    function G.unitRadius(u, fallback)
+        local engineCollision = rawget(_G, 'EngineUnitCollision')
+        if Engine.active() and type(engineCollision) == 'function' then
+            local r = engineCollision(u)
+            if type(r) == 'number' and r > 0 then
+                return r
+            end
+        end
+        local reforged = rawget(_G, 'BlzGetUnitCollisionSize')
+        if not Engine.active() and type(reforged) == 'function' then
+            local ok, r = pcall(reforged, u)
+            if ok and type(r) == 'number' and r > 0 then
+                return r
+            end
+        end
+        return fallback
+    end
+
+    -- Bodies block as in Warcraft III (always on):
+    -- the hero cannot walk through enemies and slides along them. Only a step
+    -- toward an enemy is held back, so a hero an enemy walked into can
+    -- always step away. Raven Form flies and Wind Walk slips through, as the
+    -- real spells do; the split hero is not there at all.
+    function G.collide(x, y, nx, ny)
+        if R.split then
+            return nx, ny
+        end
+        for _, buff in pairs(R.buffs) do
+            if buff.def.fly or buff.def.fade then
+                return nx, ny
+            end
+        end
+        local rh = R.heroRadius or 32
+        for _ = 1, 3 do
+            local pushed = false
+            for i = 1, R.en do
+                local info = R.enemies[R.elist[i]]
+                if info then
+                    local ex, ey = R.ex[i], R.ey[i]
+                    local reach = rh + (info.radius or 24)
+                    local dx, dy = nx - ex, ny - ey
+                    local d2 = dx * dx + dy * dy
+                    if d2 < reach * reach then
+                        local ox, oy = x - ex, y - ey
+                        local old2 = ox * ox + oy * oy
+                        if d2 < old2 - 0.01 then
+                            local d = math.sqrt(d2)
+                            if d < 0.01 then
+                                dx, dy, d = ox, oy, math.sqrt(old2)
+                            end
+                            if d >= 0.01 then
+                                -- Back out to the edge (or to where it stood, if
+                                -- it already overlapped): it slides around.
+                                local keep = math.min(reach, math.sqrt(old2))
+                                nx, ny = ex + dx / d * keep, ey + dy / d * keep
+                                pushed = true
+                            end
+                        end
+                    end
+                end
+            end
+            if not pushed then
+                break
+            end
+        end
+        return nx, ny
+    end
+
     function G.updateMovement(dt)
         -- A right-click gave the hero a native order: cancel it, or the
         -- engine moves the hero too and the two speeds add up.
@@ -4281,7 +4679,7 @@ do
             local length = math.sqrt(dx * dx + dy * dy)
             dx, dy = dx / length, dy / length
             local x, y = R.hx, R.hy
-            local nx, ny = x + dx * step, y + dy * step
+            local nx, ny = G.collide(x, y, x + dx * step, y + dy * step)
             if not G.walkable(nx, ny) then
                 if G.walkable(nx, y) then
                     ny = y
@@ -4373,14 +4771,14 @@ do
                 return
             end
             if R.upperAnim then
-                G.heroSwing('attack', 0, 1 + s.attackSpeed)
+                G.heroSwing(R.attackAnim, 0, 1 + s.attackSpeed)
             elseif R.melee and s.cleave <= 0 then
                 G.fx(FX.cleave, targets[1].x, targets[1].y, 0.8)
             end
         elseif R.time >= R.spinUntil then
             local t = targets[1]
             BlzSetUnitFacingEx(R.hero, bj_RADTODEG * Atan2(t.y - R.hy, t.x - R.hx))
-            G.heroAnim('attack', math.min(ranged and 0.5 or 0.65, R.attackClock))
+            G.heroAnim(R.attackAnim, math.min(ranged and 0.5 or 0.65, R.attackClock))
         end
     end
 
@@ -4468,6 +4866,7 @@ do
         if R == nil or R.ended then
             return
         end
+        G.updateWorldObjects(dt)
         G.updateCompanion(dt)
         R.slowClock = R.slowClock - dt
         if R.slowClock <= 0 then
@@ -4561,7 +4960,9 @@ do
             livesUsed = 0, invulnUntil = 0, invulnerable = false, magnetUntil = 0, tagCount = 0,
             attackClock = 0.5, spawnClock = 1.0, slowClock = 0, summonClock = 1.0, hudClock = 0,
             rings = 0, finalAt = nil, nextElite = 75, nextBoss = 1, finalSpawned = false, boss = nil,
-            moving = false, anim = '', animLock = 0, spinUntil = 0, images = {}}
+            moving = false, anim = '', animLock = 0, spinUntil = 0, images = {},
+            attackAnim = def.attackAnim or 'attack', castAnim = def.castAnim, morph = nil,
+            interactables = {}, worldChestsOpened = 0, objectClock = GetRandomReal(58, 78), hitFeedbackAt = 0}
 
         G.playMusic(zone.music)
         local f = zone.fog
@@ -4648,9 +5049,27 @@ do
         SetCameraField(CAMERA_FIELD_ZOFFSET, 0, 0)
         SetCameraField(CAMERA_FIELD_FARZ, 5000, 0)
 
+        -- Script movement (SetUnitX/Y) skips pathing, so the hero collides
+        -- with enemies by hand (G.collide), with the game's own radii.
+        R.heroRadius = G.unitRadius(hero, 32)
+
         for _ = 1, 4 do
             local x, y = G.spawnPoint(550, 750)
             G.createEnemy(G.pickEnemyType(), x, y, {})
+        end
+        -- A gold vein, a barrel and a wooden chest lie near the start, as in
+        -- the campaign's Forgotten Hollow; more turn up during the run.
+        if Engine.active() and EngineCvar('survivor_objects') == 'all' then
+            -- Test aid: +set survivor_objects all lays every kind in a ring.
+            for i, kind in ipairs(WORLD_OBJECT_KINDS) do
+                local a = TWO_PI * i / #WORLD_OBJECT_KINDS
+                G.spawnWorldObject(kind, R.hx + math.cos(a) * 420, R.hy + math.sin(a) * 420, true)
+            end
+        else
+            for _, kind in ipairs({'vein', 'barrel', 'chest'}) do
+                local x, y = G.worldObjectPoint(300, 520)
+                G.spawnWorldObject(kind, x, y)
+            end
         end
         G.spawnCompanion()
         Hud.show()
@@ -4818,6 +5237,7 @@ do
         for u in pairs(R.images) do
             RemoveUnit(u)
         end
+        G.clearWorldObjects()
         RemoveUnit(R.hero)
         R = nil
         Hud.hide()
@@ -4946,6 +5366,13 @@ do
         end
         x, top = tc(-0.1, -0.002)
         Hud.clock = UI.text(root, '00:00', x, top, 0.2 * k, 0.03 * k, 0.022 * k, TEXT_JUSTIFY_CENTER)
+        if Engine.touch() then
+            -- A phone has no Escape key: this opens the game menu.
+            x, top = tc(0.07, -0.006)
+            UI.button(root, x, top, 0.05 * k, 0.022 * k, 'Menu', function()
+                G.onAction('menu')
+            end, 'dark', 0.0088 * k)
+        end
         x, top = tc(-0.15, -0.032)
         Hud.subline = UI.text(root, '', x, top, 0.3 * k, 0.014 * k, 0.0085 * k, TEXT_JUSTIFY_CENTER)
         x, top = tc(-0.13, -0.047)
@@ -5998,7 +6425,8 @@ do
     -- Movement is either the mouse (right-click a point) or the keyboard
     -- (hold the movement keys), never both.
     function Keys.wasd()
-        return Profile.data ~= nil and Profile.data.opts.wasd == 1
+        -- A touch screen has no movement keys: fingers always steer.
+        return Profile.data ~= nil and Profile.data.opts.wasd == 1 and not Engine.touch()
     end
 
     function Keys.code(action)
@@ -6313,7 +6741,8 @@ do
         UI.setActive(Options.keyMode, wasd)
         BlzFrameSetText(Options.modeHint, U.col(GREY, wasd
             and ('Hold ' .. Keys.moveLabel() .. ' to walk. Right-clicks do not move the hero.')
-            or 'Right-click the ground to walk there. The movement keys do nothing.'))
+            or (Engine.active() and 'Right-click the ground to walk there, or hold it: the hero follows the cursor.'
+                or 'Right-click the ground to walk there. The movement keys do nothing.')))
         for _, a in ipairs(ACTIONS) do
             local row = Options.binds[a.key]
             local waiting = Options.waiting == a.key
@@ -6535,7 +6964,13 @@ do
         if Lobby.footer == nil then
             return
         end
-        local move = Keys.wasd() and (Keys.moveLabel() .. ' to move') or 'Right-click to move'
+        if Engine.touch() then
+            BlzFrameSetText(Lobby.footer, U.col(GREY, 'Touch and hold the ground: your hero follows your finger'
+                .. '  -  attacks and spells cast themselves  -  tap a card to pick it'))
+            return
+        end
+        local move = Keys.wasd() and (Keys.moveLabel() .. ' to move')
+            or (Engine.active() and 'Right-click or hold right-click to move' or 'Right-click to move')
         BlzFrameSetText(Lobby.footer, U.col(GREY, move .. '  -  attacks and spells cast themselves  -  '
             .. Keys.label('card1') .. ' ' .. Keys.label('card2') .. ' ' .. Keys.label('card3') .. ' picks a card  -  '
             .. Keys.label('reroll') .. ' rerolls  -  ' .. Keys.label('play') .. ' to play  -  Esc for options'))
@@ -7959,6 +8394,10 @@ do
         -- select, quick save, the stock game menu, quests, allies).
         if Engine.active() then
             EngineCvar('cl_fkeys', '0')
+            -- Holding the right button (or a finger on the ground, on a touch
+            -- screen) keeps sending the point under it: the hero follows.
+            EngineCvar('cl_smart_hold', '1')
+            EngineCvar('cl_touch_smart', '1')
         end
 
         Hud.build()
@@ -8029,6 +8468,11 @@ do
     -- The browser build (port/web/site/survivor.js sets survivor_web 1).
     function Engine.web()
         return Engine.active() and EngineCvar('survivor_web') == '1'
+    end
+
+    -- A phone or tablet (survivor.js: a finger is the main pointer).
+    function Engine.touch()
+        return Engine.web() and EngineCvar('survivor_touch') == '1'
     end
 
     function Engine.loadingScreen(zone, background)

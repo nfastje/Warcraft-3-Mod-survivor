@@ -8,7 +8,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $root  = Split-Path (Split-Path $PSScriptRoot)
 $dist  = Join-Path $root 'engine\dist\windows'
-$out   = Join-Path $root 'release'
+# release\ holds only the site's upload copy (make_upload.ps1): builds go here.
+$out   = Join-Path $root 'engine\build\portable'
 $stage = Join-Path $out 'stage\Warcraft Survivors'
 $sevenZip = 'C:\Program Files\7-Zip\7z.exe'
 $sfx = if ($IncludeWarcraftData) {

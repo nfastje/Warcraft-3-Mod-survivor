@@ -9,6 +9,8 @@
 *	Abilities\Weapons\FrostWyrmMissile\FrostWyrmMissile.mdx
 *	Abilities\Weapons\GlaiveMissile\GlaiveMissile.mdx
 *	abilities\Weapons\PhoenixMissile\PhoenixAttack.wav
+*	Buildings\Other\BarrelsUnit0\BarrelsUnit0.mdx
+*	Doodads\Outland\Props\Standard\Standard0.mdx
 *	Objects\Spawnmodels\Orc\Orcblood\HeroShadowHunterBlood.mdx
 *	Objects\Spawnmodels\Undead\UndeadBlood\UndeadBloodCryptFiend.mdx
 *	Sound\Music\mp3Music\ArthasTheme.mp3
@@ -67,6 +69,8 @@
 *	Units\Orc\HeroTaurenChieftain\HeroTaurenChieftainAttack3.wav
 *	units\undead\herocryptlord\cryptlordattackeffort2.wav
 *	war3mapmisc.txt
+War3.mpq	Abilities\Spells\Demon\DarkPortal\DarkPortalTarget.mdx
+War3.mpq	abilities\Spells\Demon\DarkPortal\DemonRune1backup.blp
 War3.mpq	Abilities\Spells\Demon\RainOfFire\RainOfFireTarget.mdx
 War3.mpq	Abilities\Spells\Demon\RainOfFire\RainOfFireTarget1.wav
 War3.mpq	Abilities\Spells\Demon\RainOfFire\RainOfFireTarget2.wav
@@ -117,6 +121,7 @@ War3.mpq	Abilities\Spells\Orc\LightningBolt\LightningBolt.wav
 War3.mpq	Abilities\Spells\Orc\MirrorImage\MirrorImage.wav
 War3.mpq	Abilities\Spells\Orc\MirrorImage\MirrorImageCaster.mdx
 War3.mpq	Abilities\Spells\Orc\Purge\PurgeBuffTarget.mdx
+War3.mpq	Abilities\Spells\Orc\Reincarnation\Reincarnation.wav
 War3.mpq	Abilities\Spells\Orc\Shockwave\Shockwave.wav
 War3.mpq	Abilities\Spells\Orc\Shockwave\ShockwaveMissile.mdx
 War3.mpq	Abilities\Spells\Orc\WarStomp\WarStompCaster.mdx
@@ -158,6 +163,12 @@ War3.mpq	Abilities\Weapons\CryptFiendMissile\CryptFiendMissile.mdx
 War3.mpq	Abilities\Weapons\CryptFiendMissile\CryptFiendMissileLaunch3.wav
 War3.mpq	Abilities\Weapons\DemonHunterMissile\DemonHunterMissile.mdx
 War3.mpq	Abilities\Weapons\DragonHawkMissile\DragonHawkMissile.mdx
+War3.mpq	Abilities\Weapons\DruidoftheTalonMissile\DruidoftheTalonMissile.mdx
+War3.mpq	Abilities\Weapons\DruidoftheTalonMissile\DruidOfTheTalonMissileHit1.wav
+War3.mpq	Abilities\Weapons\DruidoftheTalonMissile\DruidOfTheTalonMissileHit2.wav
+War3.mpq	Abilities\Weapons\DruidoftheTalonMissile\DruidOfTheTalonMissileHit3.wav
+War3.mpq	Abilities\Weapons\DruidoftheTalonMissile\DruidOfTheTalonMissileLaunch1.wav
+War3.mpq	Abilities\Weapons\DruidoftheTalonMissile\DruidOfTheTalonMissileLaunch2.wav
 War3.mpq	Abilities\Weapons\FarseerMissile\FarseerMissile.mdx
 War3.mpq	Abilities\Weapons\FarseerMissile\FarseerMissile.wav
 War3.mpq	Abilities\Weapons\FarseerMissile\FarseerMissileLaunch.wav
@@ -332,6 +343,7 @@ War3.mpq	Doodads\Cityscape\Structures\Tavern\Tavern.mdx
 War3.mpq	Doodads\Dungeon\Props\DungeonObilisk\DungeonObilisk.mdx
 War3.mpq	Doodads\Dungeon\Props\JunkPile\JunkPile0.mdx
 War3.mpq	Doodads\Dungeon\Props\JunkPile\JunkPile1.mdx
+War3.mpq	Doodads\Dungeon\Props\MineCart\MineCart.mdx
 War3.mpq	Doodads\Dungeon\Props\TreasurePile\TreasurePile0.mdx
 War3.mpq	Doodads\Dungeon\Props\TreasurePile\TreasurePile1.mdx
 War3.mpq	Doodads\Dungeon\Structures\DungeonArchway1\DungeonArchway1.mdx
@@ -656,6 +668,7 @@ War3.mpq	Objects\Spawnmodels\Human\HumanBlood\HumanBloodFootman.mdx
 War3.mpq	Objects\Spawnmodels\Human\HumanBlood\HumanBloodKnight.mdx
 War3.mpq	Objects\Spawnmodels\Human\HumanBlood\HumanBloodPeasant.mdx
 War3.mpq	Objects\Spawnmodels\Human\HumanBlood\HumanBloodRifleman.mdx
+War3.mpq	Objects\Spawnmodels\NightElf\NightElfBlood\NightElfBloodArcher.mdx
 War3.mpq	Objects\Spawnmodels\NightElf\NightElfBlood\NightElfBloodDruidoftheClaw.mdx
 War3.mpq	Objects\Spawnmodels\NightElf\NightElfBlood\NightElfBloodHeroDemonHunter.mdx
 War3.mpq	Objects\Spawnmodels\Orc\Orcblood\OrcBloodGrunt.mdx
@@ -748,6 +761,7 @@ War3.mpq	ReplaceableTextures\CommandButtons\BTNManaBurn.blp
 War3.mpq	ReplaceableTextures\CommandButtons\BTNMaskOfDeath.blp
 War3.mpq	ReplaceableTextures\CommandButtons\BTNMassTeleport.blp
 War3.mpq	ReplaceableTextures\CommandButtons\BTNMedalionOfCourage.blp
+War3.mpq	ReplaceableTextures\CommandButtons\BTNMedivh.blp
 War3.mpq	ReplaceableTextures\CommandButtons\BTNMetamorphosis.blp
 War3.mpq	ReplaceableTextures\CommandButtons\BTNMirrorImage.blp
 War3.mpq	ReplaceableTextures\CommandButtons\BTNMove.blp
@@ -767,6 +781,7 @@ War3.mpq	ReplaceableTextures\CommandButtons\BTNPitLord.blp
 War3.mpq	ReplaceableTextures\CommandButtons\BTNPotionGreen.blp
 War3.mpq	ReplaceableTextures\CommandButtons\BTNPriestAdept.blp
 War3.mpq	ReplaceableTextures\CommandButtons\BTNPriestessOfTheMoon.blp
+War3.mpq	ReplaceableTextures\CommandButtons\BTNRavenForm.blp
 War3.mpq	ReplaceableTextures\CommandButtons\BTNReincarnation.blp
 War3.mpq	ReplaceableTextures\CommandButtons\BTNResurrection.blp
 War3.mpq	ReplaceableTextures\CommandButtons\BTNRevenant.blp
@@ -1185,6 +1200,7 @@ War3.mpq	Textures\Lords0007.blp
 War3.mpq	Textures\LordSNatural.blp
 War3.mpq	Textures\LordsRockwall.blp
 War3.mpq	Textures\Meatwagon.blp
+War3.mpq	Textures\Minecart.blp
 War3.mpq	Textures\Nerubian.blp
 War3.mpq	Textures\NorthrendNatural02.blp
 War3.mpq	Textures\NorthrendNatural03.blp
@@ -1215,6 +1231,7 @@ War3.mpq	Textures\VillageDoodad1.blp
 War3.mpq	Textures\WyvernRider.blp
 War3.mpq	Textures\Yellow_Glow_Dim2.blp
 War3.mpq	UI\Buttons\HeroLevel\herolevel-border.blp
+War3.mpq	UI\Console\Human\HumanUITile-InventoryCover.blp
 War3.mpq	UI\Console\Human\HumanUITile02.blp
 War3.mpq	UI\Console\Human\HumanUITile03.blp
 War3.mpq	UI\Console\Human\HumanUITile04.blp
@@ -1309,6 +1326,8 @@ War3.mpq	UI\Widgets\Console\Human\infocard-gold.blp
 War3.mpq	UI\Widgets\Console\Human\infocard-heroattributes-agi.blp
 War3.mpq	UI\Widgets\Console\Human\infocard-heroattributes-int.blp
 War3.mpq	UI\Widgets\Console\Human\infocard-heroattributes-str.blp
+War3.mpq	UI\Widgets\Console\Human\infocard-neutral-armor-large.blp
+War3.mpq	UI\Widgets\Console\Human\infocard-neutral-attack-piercing.blp
 War3.mpq	UI\Widgets\Console\Human\infocard-supply.blp
 War3.mpq	UI\Widgets\EscMenu\Human\alliance-gold.blp
 War3.mpq	UI\Widgets\EscMenu\Human\alliance-lumber.blp
@@ -1390,6 +1409,10 @@ War3.mpq	UI\Widgets\Glues\SinglePlayerSkirmish-ScrollBarKnob.blp
 War3.mpq	UI\Widgets\Glues\SinglePlayerSkirmish-ScrollBarKnobDisabled.blp
 War3.mpq	UI\Widgets\ToolTips\Human\human-tooltip-background.blp
 War3.mpq	UI\Widgets\ToolTips\Human\human-tooltip-border.blp
+War3.mpq	UI\Widgets\ToolTips\Human\ToolTipGoldIcon.blp
+War3.mpq	UI\Widgets\ToolTips\Human\ToolTipLumberIcon.blp
+War3.mpq	UI\Widgets\ToolTips\Human\ToolTipManaIcon.blp
+War3.mpq	UI\Widgets\ToolTips\Human\ToolTipSupplyIcon.blp
 War3.mpq	Units\Creeps\AzureDragon\DragonWhat1.wav
 War3.mpq	Units\Creeps\AzureDragon\DragonWhat2.wav
 War3.mpq	Units\Creeps\AzureDragon\DragonWhat3.wav
@@ -1525,6 +1548,11 @@ War3.mpq	Units\Creeps\Kobold\KoboldYes1.wav
 War3.mpq	Units\Creeps\Kobold\KoboldYes2.wav
 War3.mpq	Units\Creeps\Kobold\KoboldYes3.wav
 War3.mpq	units\creeps\KoboldGeomancer\KoboldGeomancer_Portrait.mdx
+War3.mpq	units\Creeps\Medivh\GenericGlow2_mip1.blp
+War3.mpq	units\Creeps\Medivh\Medivh.blp
+War3.mpq	units\creeps\Medivh\Medivh.mdx
+War3.mpq	units\creeps\Medivh\Medivh_Portrait.mdx
+War3.mpq	units\Creeps\Medivh\StormCrow.blp
 War3.mpq	units\creeps\Murloc\Murloc.mdx
 War3.mpq	units\creeps\Murloc\Murloc_Portrait.mdx
 War3.mpq	Units\Creeps\Murloc\MurlocDeath.wav
@@ -2233,6 +2261,9 @@ War3x.mpq	A.mpq
 War3x.mpq	Abilities\Spells\Human\FlameStrike\FlameStrikeTarget.mdx
 War3x.mpq	Abilities\Spells\Human\FlameStrike\FlameStrikeTargetWaveNonLoop1.wav
 War3x.mpq	Abilities\Spells\Human\FlameStrike\MegaBlastTail.blp
+War3x.mpq	Abilities\Spells\Human\ManaFlare\ManaFlareBoltImpact.mdx
+War3x.mpq	Abilities\Spells\Human\ManaFlare\ManaFlareMissile.mdx
+War3x.mpq	Abilities\Spells\Human\ManaFlare\ManaFlareStrike.wav
 War3x.mpq	Abilities\Spells\Human\ManaShield\ManaShieldCaster.mdx
 War3x.mpq	Abilities\Spells\NightElf\Blink\BlinkBirth1.wav
 War3x.mpq	Abilities\Spells\NightElf\Blink\BlinkCaster.mdx
@@ -2280,6 +2311,9 @@ War3x.mpq	Abilities\Spells\Other\Volcano\VolcanoMissile.mdx
 War3x.mpq	Abilities\Spells\Undead\Impale\ImpaleArm.blp
 War3x.mpq	Abilities\Spells\Undead\Impale\ImpaleLaunch1.wav
 War3x.mpq	Abilities\Spells\Undead\Impale\ImpaleMissTarget.mdx
+War3x.mpq	Abilities\Weapons\AvengerMissile\AvengerMissile.mdx
+War3x.mpq	Abilities\Weapons\AvengerMissile\DestroyerMissile.wav
+War3x.mpq	Abilities\Weapons\AvengerMissile\Ghost1Mod.blp
 War3x.mpq	Abilities\Weapons\BatTrollMissile\BatTrollMissile.mdx
 War3x.mpq	Abilities\Weapons\BloodElfMissile\BloodElfMissile.mdx
 War3x.mpq	Abilities\Weapons\BloodElfSpellThiefMISSILE\BloodElfSpellThiefMISSILE.mdx
@@ -2305,6 +2339,7 @@ War3x.mpq	Abilities\Weapons\WardenMissile\WardenMissile.mdx
 War3x.mpq	Abilities\Weapons\WingedSerpentMissile\GenericGlow2.blp
 War3x.mpq	Abilities\Weapons\WingedSerpentMissile\WingedSerpentMissile.mdx
 War3x.mpq	B.mpq
+War3x.mpq	Buildings\Other\BarrelsUnit1\BarrelsUnit1.mdx
 War3x.mpq	Buildings\Other\BarrelsUnit\BarrelsUnit.mdx
 War3x.mpq	C.mpq
 War3x.mpq	Doodads\BlackCitadel\Props\BlackCitadelStatue\BlackCitadelStatue.mdx
@@ -2336,6 +2371,7 @@ War3x.mpq	Doodads\Outland\Props\Obstacle\Obstacle3.mdx
 War3x.mpq	Doodads\Outland\Props\Obstacle\Obstacle4.mdx
 War3x.mpq	Doodads\Outland\Props\Skull\Skull0.mdx
 War3x.mpq	Doodads\Outland\Props\Skull\Skull1.mdx
+War3x.mpq	Doodads\Outland\Props\Standard\Standard1.mdx
 War3x.mpq	Doodads\Outland\Rocks\Outland_MagmaRock\Outland_MagmaRock0.mdx
 War3x.mpq	Doodads\Outland\Rocks\Outland_MagmaRock\Outland_MagmaRock1.mdx
 War3x.mpq	Doodads\Outland\Rocks\Outland_MagmaRock\Outland_MagmaRock2.mdx
@@ -2385,7 +2421,10 @@ War3x.mpq	Doodads\Ruins\Plants\Ruins_Shrub\Ruins_Shrub0.mdx
 War3x.mpq	Doodads\Ruins\Plants\Ruins_Shrub\Ruins_Shrub1.mdx
 War3x.mpq	Doodads\Ruins\Plants\Ruins_Shrub\Ruins_Shrub2.mdx
 War3x.mpq	Doodads\Ruins\Props\Firepot\Firepot.mdx
+War3x.mpq	Doodads\Ruins\Props\RuinFountain\RuinFountain.mdx
+War3x.mpq	Doodads\Ruins\Props\RuinFountain\Water_Particles.blp
 War3x.mpq	Doodads\Ruins\Props\RuinsPillar\RuinsPillar0.mdx
+War3x.mpq	Doodads\Ruins\Props\Statue\Statue0.mdx
 War3x.mpq	Doodads\Ruins\Props\Stone\Stone0.mdx
 War3x.mpq	Doodads\Ruins\Props\Stone\Stone1.mdx
 War3x.mpq	Doodads\Ruins\Props\Stone\Stone2.mdx
@@ -2447,6 +2486,7 @@ War3x.mpq	Objects\InventoryItems\PotofGold\PotofGold.mdx
 War3x.mpq	Objects\InventoryItems\runicobject\runicobject.mdx
 War3x.mpq	Objects\InventoryItems\treasurechest\treasurechest.blp
 War3x.mpq	Objects\InventoryItems\TreasureChest\treasurechest.mdx
+War3x.mpq	Objects\Spawnmodels\Critters\Albatross\CritterBloodAlbatross.mdx
 War3x.mpq	Objects\Spawnmodels\Human\HumanBlood\HeroBloodElfBlood.mdx
 War3x.mpq	Objects\Spawnmodels\Other\ToonBoom\swirl1.blp
 War3x.mpq	Objects\Spawnmodels\Other\ToonBoom\ToonBoom.mdx
@@ -2468,8 +2508,10 @@ War3x.mpq	ReplaceableTextures\CommandButtons\BTNCleavingAttack.blp
 War3x.mpq	ReplaceableTextures\CommandButtons\BTNClusterRockets.blp
 War3x.mpq	ReplaceableTextures\CommandButtons\BTNCrushingWave.blp
 War3x.mpq	ReplaceableTextures\CommandButtons\BTNDaggerOfEscape.blp
+War3x.mpq	ReplaceableTextures\CommandButtons\BTNDarkPortal.blp
 War3x.mpq	ReplaceableTextures\CommandButtons\BTNDoom.blp
 War3x.mpq	ReplaceableTextures\CommandButtons\BTNDrunkenDodge.blp
+War3x.mpq	ReplaceableTextures\CommandButtons\BTNEnchantedCrows.blp
 War3x.mpq	ReplaceableTextures\CommandButtons\BTNEngineeringUpgrade.blp
 War3x.mpq	ReplaceableTextures\CommandButtons\BTNEntrapmentWard.blp
 War3x.mpq	ReplaceableTextures\CommandButtons\BTNFanOfKnives.blp
@@ -2494,6 +2536,7 @@ War3x.mpq	ReplaceableTextures\CommandButtons\BTNLichVersion2.blp
 War3x.mpq	ReplaceableTextures\CommandButtons\BTNLifeDrain.blp
 War3x.mpq	ReplaceableTextures\CommandButtons\BTNLocustSwarm.blp
 War3x.mpq	ReplaceableTextures\CommandButtons\BTNManaDrain.blp
+War3x.mpq	ReplaceableTextures\CommandButtons\BTNManaFlare.blp
 War3x.mpq	ReplaceableTextures\CommandButtons\BTNMarkOfFire.blp
 War3x.mpq	ReplaceableTextures\CommandButtons\BTNMonsoon.blp
 War3x.mpq	ReplaceableTextures\CommandButtons\BTNNagaSeaWitch.blp
@@ -2600,6 +2643,7 @@ War3x.mpq	Textures\BloodBlobs1.blp
 War3x.mpq	Textures\BloodElf-SpellThief.blp
 War3x.mpq	Textures\BloodElfBallz.blp
 War3x.mpq	Textures\BloodSplash.blp
+War3x.mpq	Textures\BloodSplash4tga.blp
 War3x.mpq	Textures\BloodWhiteSmall.blp
 War3x.mpq	Textures\Blue_Glow2.blp
 War3x.mpq	Textures\Blue_Star2.blp
@@ -2702,6 +2746,7 @@ War3x.mpq	Textures\RibbonNE1.blp
 War3x.mpq	Textures\RibbonNE1_blue.blp
 War3x.mpq	Textures\RibbonNE1_Red2.blp
 War3x.mpq	Textures\RibbonNE1_White.blp
+War3x.mpq	Textures\ring00.blp
 War3x.mpq	Textures\RingOFire.blp
 War3x.mpq	Textures\Rock.blp
 War3x.mpq	Textures\rock64.blp
