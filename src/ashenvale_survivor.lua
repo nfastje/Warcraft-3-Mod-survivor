@@ -488,9 +488,13 @@ do
         interval = 1.0, dmg = 11, radius = 240, fx = FX.holyLight, attach = 'Abilities\\Spells\\Human\\DevotionAura\\DevotionAura.mdl',
         apply = function(s, v) s.armor = s.armor + v.amount end,
         desc = 'Holy light burns enemies within {radius} for {dmg} damage every second. Grants {pct} armor.'})
-    spell('critical_strike', {name = 'Critical Strike', code = 'AOcr', icon = 'BTNCriticalStrike', kind = 'passive', per = 0.04,
-        apply = function(s, v) s.crit = s.crit + v.amount; s.critMult = s.critMult + 0.1 * v.rank end,
-        desc = '+{pct}\037 critical strike chance and stronger critical hits.'})
+    -- Warcraft III's Critical Strike: its own roll on attacks only, a bigger
+    -- hit with every rank. Crit chance (Precision) is the other kind: every
+    -- hit, spells too, for critical damage. An attack can land both.
+    spell('critical_strike', {name = 'Critical Strike', code = 'AOcr', icon = 'BTNCriticalStrike', kind = 'passive',
+        basePct = 1.5, per = 0.5,
+        apply = function(s, v) s.critStrike = 0.15; s.critStrikeMult = math.max(s.critStrikeMult, v.bonus) end,
+        desc = 'Attacks have a 15\037 chance to deal {pct2}\037 damage (cleave too). Spells do not; crit chance can add on top.'})
 
     spell('holy_light', {name = 'Holy Light', code = 'AHhb', icon = 'BTNHolyBolt', kind = 'heal', cd = 6.0, heal = 60,
         threshold = 0.85, dmg = 45, radius = 260, fx = FX.holyLight,
@@ -2617,7 +2621,9 @@ do
             attackSlow = 0, attackBonus = 0, killHeal = 0, killGold = 0, explode = 0, lives = 0, range = 0,
             -- Item effects (ITEM_EFFECTS).
             fireSplash = 0, darkMinion = 0, corrupt = 0, vampiric = 0, escape = 0, sanctuary = 0, flames = 0,
-            summonDamage = 0, manaCost = 0, thirst = 0, souls = 0, spellWard = 0, frostguard = 0, searing = 0}
+            summonDamage = 0, manaCost = 0, thirst = 0, souls = 0, spellWard = 0, frostguard = 0, searing = 0,
+            -- Critical Strike (the Blademaster's passive).
+            critStrike = 0, critStrikeMult = 1}
     end
 
     function G.spellValues(def, rank, power, s)
@@ -2702,6 +2708,41 @@ do
 
     function G.describeBlessing(b, x)
         return (b.desc:gsub('{v}', U.col('ffffff', U.num(G.blessingValue(b, x)))))
+    end
+
+    -- What x points of an attribute card do for the hero in this run, as
+    -- G.recomputeStats counts them (nil for other cards): the primary
+    -- attribute also adds attack damage and spell power.
+    function G.attributeEffects(key, x)
+        local s, def = R.stats, R.def
+        local parts = {}
+        local attr = ({strength = 'str', agility = 'agi', intellect = 'int'})[key]
+        if attr and attr == def.primary then
+            parts[#parts + 1] = '+' .. U.num(x * (1 + s.damage)) .. ' attack damage'
+            local k = CFG.SPELL_POWER_PER_POINT
+            parts[#parts + 1] = '+' .. U.num(100 * k * x / (1 + k * def.attr[def.primary])) .. '\037 spell power'
+        end
+        if key == 'strength' then
+            parts[#parts + 1] = '+' .. U.num(CFG.REGEN_PER_STRENGTH * x) .. ' health/s'
+        elseif key == 'agility' then
+            parts[#parts + 1] = '+' .. U.num(100 * CFG.ATTACK_SPEED_PER_AGILITY * x) .. '\037 attack speed'
+            parts[#parts + 1] = '+' .. U.num(CFG.ARMOR_PER_AGILITY * x) .. ' armor'
+        elseif key == 'intellect' then
+            parts[#parts + 1] = '+' .. U.num(CFG.MANA_PER_INTELLECT * x) .. ' mana'
+            parts[#parts + 1] = '+' .. U.num(CFG.MANA_REGEN_PER_INTELLECT * x) .. ' mana/s'
+        elseif key == 'stamina' then
+            parts[#parts + 1] = '+' .. U.num(CFG.HP_PER_STAMINA * x) .. ' health'
+        elseif key == 'armor' then
+            -- Warcraft III armor: each point takes a little less off a hit.
+            local function reduction(a)
+                return a >= 0 and 0.06 * a / (1 + 0.06 * a) or 0
+            end
+            parts[#parts + 1] = 'Attacks deal ' .. U.num(100 * reduction(s.armor)) .. '\037  >  '
+                .. U.num(100 * reduction(s.armor + x)) .. '\037 less damage'
+        else
+            return nil
+        end
+        return table.concat(parts, ', ')
     end
 
     -- An item's stats on one line: "+4 Strength, +2 Stamina, +6 percent damage".
@@ -5357,7 +5398,15 @@ do
 
     function G.attackHit(u, x, y, damage)
         local s = R.stats
-        G.damage(u, damage, 'attack')
+        if s.critStrike > 0 and GetRandomReal(0, 1) < s.critStrike then
+            damage = damage * s.critStrikeMult
+            if CFG.DAMAGE_NUMBERS then
+                G.floatText(x, y + 40, 'Critical!', 10, 255, 80, 40)
+            end
+            G.damage(u, damage, 'critical_strike')
+        else
+            G.damage(u, damage, 'attack')
+        end
         if s.vampiric > 0 then
             G.heal(damage * s.vampiric)
         end
@@ -6855,6 +6904,10 @@ do
             name = def.name
             sub = 'Blessing'
             desc = G.describeBlessing(def, amount)
+            local effects = G.attributeEffects(c.key, amount)
+            if effects then
+                desc = desc .. '\n' .. U.col('bfb6a8', effects)
+            end
             if current then
                 desc = desc .. '\n' .. U.col(GREY, 'Total: ') .. G.describeBlessing(def, current.value + amount)
             end

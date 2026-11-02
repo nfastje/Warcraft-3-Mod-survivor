@@ -354,6 +354,16 @@ when the play test never felt threatened), so the enemies stay this strong until
   (Hoarder), Fortune (Collector), Persistence (Westfall), Multishot (Heroic). The codex says what opens a locked
   one. Quests (phase 6) will open some of them too.
 
+### Play test 1, third round (2026-11-01)
+
+- Attribute cards say what the points do for this hero (`G.attributeEffects`): Strength health per second,
+  Agility attack speed and armor, Intellect mana and mana per second, Stamina health, Armor the share of an
+  attack it takes off; the primary attribute also attack damage and spell power.
+- Critical Strike (Blademaster) is Warcraft III's again: its own 15 percent roll on attacks only, for 200 percent
+  damage at rank 1 and 50 points more a rank (cleave and the other on-hit effects use the bigger hit). It no
+  longer gives crit chance, which Precision already sells; crit chance works on every hit, spells too, and can
+  land on top of it.
+
 Next: more play tests, then more rounds (zone powers past Ashenvale, hero outliers such as Blizzard and
 Bladestorm, Heroic and Mythic multipliers).
 
