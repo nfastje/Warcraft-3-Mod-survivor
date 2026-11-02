@@ -901,12 +901,12 @@ do
     for _, b in ipairs(BLESSINGS) do
         BLESSING_BY_KEY[b.key] = b
     end
-    -- The five attributes, Ferocity, Swiftness and Regeneration are offered
-    -- from the start; every other card opens with an achievement
-    -- (Profile.blessingOpen), and quests will open some (phase 6).
-    local BLESSING_UNLOCKS = {haste = 'slayer', reach = 'survivor', precision = 'ascendant', vampirism = 'boss_hunter',
-        brutality = 'exterminator', magnetism = 'veteran', wisdom = 'scholar', greed = 'hoarder', fortune = 'collector',
-        persistence = 'zone2', multishot = 'heroic'}
+    -- Only the five attributes are offered from the start; every other card
+    -- opens with an achievement (Profile.blessingOpen), from the first boss
+    -- to a Heroic win, and quests will open some (phase 6).
+    local BLESSING_UNLOCKS = {regeneration = 'boss_slain', swiftness = 'hold_out', ferocity = 'slayer', haste = 'survivor',
+        precision = 'ascendant', vampirism = 'boss_hunter', reach = 'collector', greed = 'hoarder', wisdom = 'scholar',
+        magnetism = 'veteran', persistence = 'zone2', fortune = 'artisan', brutality = 'exterminator', multishot = 'heroic'}
     for key, unlock in pairs(BLESSING_UNLOCKS) do
         BLESSING_BY_KEY[key].unlock = unlock
     end
@@ -1593,6 +1593,10 @@ do
     end
     achievement('first_blood', 'First Blood', 'Slay your first enemy.', 'ratc', 'BTNClawsOfAttack', 5,
         function(p) return p.kills, 1 end)
+    achievement('boss_slain', 'Boss Slain', 'Slay a boss.', 'AHtb', 'BTNStormBolt', 5,
+        function(p) return p.bosses, 1 end)
+    achievement('hold_out', 'Hold Out', 'Survive 5:00 in a run.', 'AHds', 'BTNDivineIntervention', 5,
+        function(p) return maxValue(p.heroTime), 300 end)
     achievement('slayer', 'Slayer', 'Slay 1,000 enemies.', 'AOcr', 'BTNCriticalStrike', 10,
         function(p) return p.kills, 1000 end)
     achievement('exterminator', 'Exterminator', 'Slay 10,000 enemies.', 'AOww', 'BTNWhirlwind', 20,
@@ -8803,7 +8807,8 @@ do
         end
         local rows = (#SPELL_ORDER + perRow - 1) // perRow
         local blessTop = T - 0.058 - rows * step - 0.02
-        UI.text(page, U.col(GREY, 'BLESSINGS'), ix, blessTop + 0.016, 0.2, 0.012, 0.0072)
+        UI.text(page, U.col(GREY, 'BLESSINGS') .. U.col('a83a2c', '   red frame: opens with an achievement'), ix,
+            blessTop + 0.016, 0.3, 0.012, 0.0072)
         for i, b in ipairs(BLESSINGS) do
             local column = math.fmod(i - 1, perRow)
             local row = (i - 1) // perRow
@@ -8861,8 +8866,14 @@ do
                 seen = seen + 1
             end
             local texture = o.blessing and U.icon(o.blessing.code, o.blessing.icon) or U.spellIcon(SPELLS[o.key])
-            UI.setIcon(o, texture, not has)
-            UI.frameColor(o, has and 150 or 60, has and 112 or 50, has and 58 or 40)
+            -- A stat card its achievement has not opened yet: dark, with a red frame.
+            local locked = o.blessing and not Profile.blessingOpen(o.blessing)
+            UI.setIcon(o, texture, not has or locked)
+            if locked then
+                UI.frameColor(o, 150, 36, 28)
+            else
+                UI.frameColor(o, has and 150 or 60, has and 112 or 50, has and 58 or 40)
+            end
         end
         UI.setBar(X.progress, seen / #X.icons)
         BlzFrameSetText(X.progressText, U.col(GREY, 'Discovered ') .. seen .. ' / ' .. #X.icons)

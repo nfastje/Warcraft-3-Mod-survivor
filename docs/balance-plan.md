@@ -348,11 +348,12 @@ when the play test never felt threatened), so the enemies stay this strong until
 - End screen: achievements get a line each while they fit above the DAMAGE rule (three lines under the loot,
   five without loot), else one line naming the first three.
 - Stat cards: the hero's primary attribute is drawn most (weight 4), the other attributes next (2.2), the rest
-  1.4 (`BLESSING_WEIGHT`). Only the five attributes, Ferocity, Swiftness and Regeneration are offered from the
-  start; the others open with an achievement (`BLESSING_UNLOCKS`): Haste (Slayer), Reach (Survivor), Precision
-  (Ascendant), Vampirism (Boss Hunter), Brutality (Exterminator), Magnetism (Veteran), Wisdom (Scholar), Greed
-  (Hoarder), Fortune (Collector), Persistence (Westfall), Multishot (Heroic). The codex says what opens a locked
-  one. Quests (phase 6) will open some of them too.
+  1.4 (`BLESSING_WEIGHT`). Only the five attributes are offered from the start (Ferocity, Swiftness and
+  Regeneration were open for a day by mistake); the others open with an achievement (`BLESSING_UNLOCKS`), early to
+  late: Regeneration (Boss Slain, new: slay a boss), Swiftness (Hold Out, new: survive 5:00), Ferocity (Slayer),
+  Haste (Survivor), Precision (Ascendant), Vampirism (Boss Hunter), Reach (Collector), Greed (Hoarder), Wisdom
+  (Scholar), Magnetism (Veteran), Persistence (Westfall), Fortune (Artisan), Brutality (Exterminator), Multishot
+  (Heroic). In the codex a locked card has a red frame and says what opens it. Quests (phase 6) will open some too.
 
 ### Play test 1, third round (2026-11-01)
 

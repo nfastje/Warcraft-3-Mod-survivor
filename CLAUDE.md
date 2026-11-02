@@ -268,7 +268,7 @@ SDK), host-authoritative, agreed balance, resource estimates. The user is still 
   report, `python tools/smoketest/run.py --balance [zone] [difficulty] [hero ids] [geared]` (`balance.lua`: plays
   the enemies and the hero itself, three seeds a hero; see `docs/balance-plan.md` for what it can and cannot see).
   Spell slots: `R.slots[i]` is the spell in slot/key i (its place in `def.pool`); `R.spells` is the learning
-  order, for iteration. Stat cards open with achievements (`BLESSING_UNLOCKS`, `Profile.blessingOpen`).
+  order, for iteration. Stat cards other than the five attributes open with achievements (`BLESSING_UNLOCKS`, `Profile.blessingOpen`).
 - Engine screenshot runs must be silent: set `SDL_AUDIODRIVER=dummy` for the process. `s_volume 0` and
   `s_musicvolume 0` alone still let a run play its sounds at full volume.
 - Loading screens never reach `+screenshot`; capture only the game window with `PrintWindow`.
